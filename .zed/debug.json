@@ -1,0 +1,36 @@
+[
+  {
+    "label": "Debug",
+    "build": {
+      "command": "cmake",
+      "args": [
+        "--build",
+        "build",
+        "--preset",
+        "clang"
+      ],
+      "cwd": "$ZED_WORKTREE_ROOT"
+    },
+    "program": "$ZED_WORKTREE_ROOT/build/chalk",
+    "cwd": "$ZED_WORKTREE_ROOT/assets",
+    "request": "launch",
+    "adapter": "CodeLLDB"
+  },
+  {
+    "label": "Debug Tests",
+    "build": {
+      "command": "cmake",
+      "args": [
+        "--build",
+        "build",
+        "--preset",
+        "clang"
+      ],
+      "cwd": "$ZED_WORKTREE_ROOT"
+    },
+    "program": "$ZED_WORKTREE_ROOT/build/tests",
+    "cwd": "$ZED_WORKTREE_ROOT/assets",
+    "request": "launch",
+    "adapter": "CodeLLDB"
+  }
+]

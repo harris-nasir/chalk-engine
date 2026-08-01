@@ -1,0 +1,78 @@
+CompileFlags:
+  CompilationDatabase: ./build
+  Add:
+    - -std=c++26
+    - -Wall
+    - -Wextra
+    - -Wpedantic
+    - -Wconversion
+    - -Wunused-parameter
+    - -fvisibility=hidden
+    - -march=native
+
+Documentation:
+  CommentFormat: Doxygen
+Diagnostics:
+  UnusedIncludes: Strict
+  ClangTidy:
+    Add:
+      [
+        modernize-*,
+        performance-*,
+        readability-*,
+        bugprone-*,
+        cppcoreguidelines-*,
+        portability-*,
+        misc-*,
+        clang-analyzer-*,
+      ]
+    Remove:
+      [
+        cppcoreguidelines-avoid-const-or-ref-data-members,
+        cppcoreguidelines-avoid-magic-numbers,
+        readability-identifier-length,
+        readability-magic-numbers,
+      ]
+    CheckOptions:
+      GlobalConstantCase: UPPER_CASE
+      readability-identifier-naming.ConstCase: lower_case
+      readability-identifier-naming.GlobalConstantCase: UPPER_CASE
+
+      readability-identifier-naming.VariableCase: lower_case
+      readability-identifier-naming.FunctionCase: lower_case
+      readability-identifier-naming.ParameterCase: lower_case
+
+      readability-identifier-naming.StructCase: PascalCase
+      readability-identifier-naming.ClassCase: PascalCase
+      readability-identifier-naming.MemberCase: lower_case
+      readability-identifier-naming.PrivateMemberCase: lower_case
+      readability-identifier-naming.PrivateMemberSuffix: _
+
+      readability-identifier-naming.NamespaceCase: lower_case
+      readability-identifier-naming.NamespaceAliasCase: lower_case
+
+      readability-identifier-naming.EnumCase: PascalCase
+      readability-identifier-naming.EnumConstantCase: PascalCase
+
+      readability-identifier-naming.MacroDefinitionCase: UPPER_CASE
+      readability-identifier-naming.MacroParameterCase: lower_case
+
+      modernize-use-trailing-return.CheckReturnVoid: true
+      cppcoreguidelines-avoid-magic-numbers.IgnoredValues: "0,1,-1"
+
+InlayHints:
+  Enabled: true
+  ParameterNames: true
+  DeducedTypes: true
+  Designators: true
+
+Completion:
+  AllScopes: true
+
+Index:
+  Background: Skip
+  StandardLibrary: true
+  External: None
+
+Style:
+  FullyQualifiedNamespaces: false

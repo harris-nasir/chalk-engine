@@ -1,0 +1,67 @@
+[
+  {
+    "label": "build",
+    "command": "cmake --preset clang && cmake --build --preset clang",
+    "show_command": false,
+    "hide": "on_success"
+  },
+  {
+    "label": "compile",
+    "command": "cmake --build --preset clang",
+    "show_command": false,
+  },
+  {
+    "label": "compile & run",
+    "command": "cmake --build --preset clang && cd build/ && ./chalk.exe",
+    "show_command": false,
+  },
+  {
+    "label": "run",
+    "command": "cd build && ./chalk.exe",
+    "show_command": false
+  },
+  {
+    "label": "run tests",
+    "command": "cd build && ./tests.exe",
+    "show_command": false
+  },
+  {
+    "label": "rebuild",
+    "command": "cmake --build --preset clang --target clean && cmake --build --preset clang",
+    "show_command": false,
+    "hide": "on_success"
+  },
+  {
+    "label": "rebuild & run",
+    "command": "cmake --build --preset clang --target clean && cmake --build --preset clang && cd build/ && ./chalk.exe",
+    "show_command": false
+  },
+  {
+    "label": "rebuild & run tests",
+    "command": "cmake --build --preset clang --target clean && cmake --build --preset clang && cd build/ && ./tests.exe",
+    "show_command": false
+  },
+  {
+    "label": "build tests",
+    "command": "cmake --build build --target tests",
+    "show_command": false,
+    "hide": "on_success"
+  },
+  {
+    "label": "clean",
+    "command": "cmake --build build --target clean",
+    "show_command": false,
+    "hide": "on_success"
+  },
+  {
+    "label": "Debug (RAD)",
+    "command": "raddbg",
+    "args": [
+      "--target",
+      "$ZED_WORKTREE_ROOT/build/chalk.exe"
+    ],
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "hide": "on_success"
+  }
+]
