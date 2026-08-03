@@ -12,11 +12,8 @@ export module engine.core:option;
 
 export namespace engine
 {
-  // A non-owning, possibly-empty reference to a resource held by an App.
-  // Carries the location it was obtained from (App::resource<T>()'s call
-  // site, or the system's registration site when resolved as a system
-  // parameter) — printed if it's ever dereferenced while empty, so the
-  // assert points at where the lookup happened, not just at this file.
+  // Non-owning, possibly-empty reference to a resource. Carries the
+  // location it was obtained from, printed if dereferenced while empty.
   template <typename T>
   class Option
   {

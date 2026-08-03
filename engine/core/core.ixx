@@ -60,10 +60,7 @@ export namespace engine
     return "Unknown";
   }
 
-  // Where a system was registered (app.add_system(...) call site), not
-  // where it's currently executing — captured once at registration via a
-  // default argument, so a missing-required-resource assert can point at
-  // the plugin file/line that declared the system, not at core.ixx.
+  // Where the system was registered, not where it's executing now.
   struct SystemInfo
   {
     Schedule schedule;
@@ -132,21 +129,8 @@ export namespace engine
     auto add_system(Schedule schedule, F system, std::source_location location = std::source_location::current())
         -> App&;
 
-    void execute()
-    {
-      run_schedule(Schedule::Startup);
-
-      running_ = true;
-      while (running_)
-      {
-        run_schedule(Schedule::PreUpdate);
-        run_schedule(Schedule::Update);
-        run_schedule(Schedule::PostUpdate);
-        run_schedule(Schedule::Render);
-      }
-
-      run_schedule(Schedule::Shutdown);
-    }
+    // Defined out-of-line below, once Diagnostics/print_diagnostic exist.
+    void execute();
 
     void request_exit() { running_ = false; }
 
@@ -197,11 +181,71 @@ export namespace engine
     u32 frame_count     = 0;
   };
 
+  enum class Severity : u8
+  {
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Fatal,
+  };
+
+  [[nodiscard]] constexpr auto severity_name(Severity severity) -> std::string_view
+  {
+    switch (severity)
+    {
+      case Severity::Debug:
+        return "DEBUG";
+      case Severity::Info:
+        return "INFO";
+      case Severity::Warn:
+        return "WARN";
+      case Severity::Error:
+        return "ERROR";
+      case Severity::Fatal:
+        return "FATAL";
+    }
+    return "UNKNOWN";
+  }
+
+  // Plain text, not a platform API, so it's fine here (unlike SetConsoleMode).
+  [[nodiscard]] constexpr auto severity_color(Severity severity) -> std::string_view
+  {
+    switch (severity)
+    {
+      case Severity::Debug:
+        return "\033[90m"; // white
+      case Severity::Info:
+        return "\033[37m"; // grey
+      case Severity::Warn:
+        return "\033[33m"; // yellow
+      case Severity::Error:
+        return "\033[31m"; // red
+      case Severity::Fatal:
+        return "\033[1;31m"; // bold red
+    }
+    return "\033[0m";
+  }
+
+  inline constexpr std::string_view SEVERITY_COLOR_RESET = "\033[0m";
+
   struct DiagnosticMessage
   {
+    Severity severity;
     std::string text;
     std::source_location location;
   };
+
+  inline void print_diagnostic(const DiagnosticMessage& entry)
+  {
+    std::string_view path = entry.location.file_name();
+    auto file_start        = path.find_last_of("/\\");
+    std::string_view file  = file_start == std::string_view::npos ? path : path.substr(file_start + 1);
+    auto tag_end           = file.find('.');
+    std::string_view tag   = tag_end == std::string_view::npos ? file : file.substr(0, tag_end);
+    std::cout << severity_color(entry.severity) << "[" << tag << "][" << severity_name(entry.severity) << "] " << file
+              << ":" << entry.location.line() << ": " << entry.text << SEVERITY_COLOR_RESET << std::endl;
+  }
 
   struct ReportFormat
   {
@@ -218,23 +262,16 @@ export namespace engine
   struct Diagnostics
   {
     template <typename... Args>
-    void report(ReportFormat fmt, Args&&... args)
+    void report(Severity severity, ReportFormat fmt, Args&&... args)
     {
-      messages_.push_back(
-          DiagnosticMessage{.text = std::vformat(fmt.fmt, std::make_format_args(args...)), .location = fmt.location}
-      );
+      push(severity, std::vformat(fmt.fmt, std::make_format_args(args...)), fmt.location);
     }
 
-    // For a message already fully formatted elsewhere (e.g.
-    // App::resolve_parameter's missing-resource diagnostic) — skips
-    // report()'s vformat, since re-running an already-resolved string
-    // through it would try to parse any literal '{'/'}' the string
-    // contains as placeholders, and — exceptions are disabled in this
-    // project — an unbalanced brace would call std::terminate() instead
-    // of throwing.
-    void report_verbatim(std::string text, std::source_location location)
+    // Skips vformat, for text that's already formatted and may contain
+    // literal braces (vformat would misread them as placeholders).
+    void report_verbatim(Severity severity, std::string text, std::source_location location)
     {
-      messages_.push_back(DiagnosticMessage{.text = std::move(text), .location = location});
+      push(severity, std::move(text), location);
     }
 
     template <typename Fn>
@@ -248,18 +285,33 @@ export namespace engine
     }
 
   private:
+    // Fatal flushes and aborts immediately instead of waiting for the
+    // next scheduled drain.
+    void push(Severity severity, std::string text, std::source_location location)
+    {
+      messages_.push_back(DiagnosticMessage{.severity = severity, .text = std::move(text), .location = location});
+      if (severity == Severity::Fatal)
+      {
+        drain_unprinted(print_diagnostic);
+        assert(false && "fatal diagnostic reported");
+      }
+    }
+
     std::vector<DiagnosticMessage> messages_;
     std::size_t printed_ = 0;
   };
 
-  inline void print_diagnostic(const DiagnosticMessage& entry)
+  // Aborts with a clear message if CorePlugin wasn't added.
+  inline auto diagnostics_or_abort(App& app, std::source_location location = std::source_location::current())
+      -> Diagnostics&
   {
-    std::string_view path = entry.location.file_name();
-    auto file_start        = path.find_last_of("/\\");
-    std::string_view file  = file_start == std::string_view::npos ? path : path.substr(file_start + 1);
-    auto tag_end           = file.find('.');
-    std::string_view tag   = tag_end == std::string_view::npos ? file : file.substr(0, tag_end);
-    std::cout << "[" << tag << "] " << file << ":" << entry.location.line() << ": " << entry.text << std::endl;
+    auto diagnostics = app.resource<Diagnostics>(location);
+    if (!diagnostics)
+    {
+      std::cerr << "[engine][FATAL] Diagnostics resource missing. CorePlugin must be added before any other plugin\n";
+      assert(false && "Diagnostics resource missing");
+    }
+    return *diagnostics;
   }
 
   class CorePlugin
@@ -294,19 +346,17 @@ namespace engine
       auto option = resource<Bare>(info.location);
       if (!option)
       {
-        if (auto diagnostics = resource<Diagnostics>(); diagnostics)
-        {
-          diagnostics->report_verbatim(
-              std::format(
-                  "system in Schedule::{} requires missing resource `{}`", schedule_name(info.schedule),
-                  typeid(Bare).name()
-              ),
-              info.location
-          );
-          diagnostics->drain_unprinted(print_diagnostic);
-        }
+        // Aborts inside report_verbatim.
+        diagnostics_or_abort(*this, info.location)
+            .report_verbatim(
+                Severity::Fatal,
+                std::format(
+                    "system in Schedule::{} requires missing resource `{}`", schedule_name(info.schedule),
+                    typeid(Bare).name()
+                ),
+                info.location
+            );
       }
-      assert(option && "required resource missing");
       return *option;
     }
   }
@@ -335,6 +385,28 @@ namespace engine
         make_system(SystemInfo{.schedule = schedule, .location = location}, std::move(system))
     );
     return *this;
+  }
+
+  void App::execute()
+  {
+    run_schedule(Schedule::Startup);
+
+    running_ = true;
+    while (running_)
+    {
+      run_schedule(Schedule::PreUpdate);
+      run_schedule(Schedule::Update);
+      run_schedule(Schedule::PostUpdate);
+      run_schedule(Schedule::Render);
+    }
+
+    run_schedule(Schedule::Shutdown);
+
+    // No PreUpdate runs after this, so flush anything reported in Shutdown.
+    if (auto diagnostics = resource<Diagnostics>(); diagnostics)
+    {
+      diagnostics->drain_unprinted(print_diagnostic);
+    }
   }
 
   namespace
