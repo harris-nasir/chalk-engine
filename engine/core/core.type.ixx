@@ -2,7 +2,7 @@ module;
 
 #include <cstdint>
 
-export module defines;
+export module engine.core:type;
 
 export using u8  = std::uint8_t;
 export using u16 = std::uint16_t;

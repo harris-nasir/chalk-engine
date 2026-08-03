@@ -30,6 +30,7 @@ Diagnostics:
       [
         cppcoreguidelines-avoid-const-or-ref-data-members,
         cppcoreguidelines-avoid-magic-numbers,
+        readability-convert-member-functions-to-static,
         readability-identifier-length,
         readability-magic-numbers,
       ]
