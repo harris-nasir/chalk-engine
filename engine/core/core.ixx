@@ -1,15 +1,16 @@
 module;
 
+#include <algorithm>
 #include <any>
-#include <cassert>
 #include <chrono>
+#include <cstdlib>
 #include <format>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <source_location>
 #include <string>
 #include <string_view>
-#include <tuple>
 #include <type_traits>
 #include <typeindex>
 #include <unordered_map>
@@ -20,6 +21,11 @@ export module engine.core;
 
 export import :option;
 export import :type;
+
+namespace engine
+{
+  using Clock = std::chrono::steady_clock;
+} // namespace engine
 
 export namespace engine
 {
@@ -34,6 +40,7 @@ export namespace engine
   {
     Startup,
     PreUpdate,
+    FixedUpdate,
     Update,
     PostUpdate,
     Render,
@@ -48,6 +55,8 @@ export namespace engine
         return "Startup";
       case Schedule::PreUpdate:
         return "PreUpdate";
+      case Schedule::FixedUpdate:
+        return "FixedUpdate";
       case Schedule::Update:
         return "Update";
       case Schedule::PostUpdate:
@@ -60,126 +69,7 @@ export namespace engine
     return "Unknown";
   }
 
-  // Where the system was registered, not where it's executing now.
-  struct SystemInfo
-  {
-    Schedule schedule;
-    std::source_location location;
-  };
-
   using System = std::function<void(App&)>;
-
-  class App
-  {
-  public:
-    App()  = default;
-    ~App() = default;
-
-    App(const App&)                    = delete;
-    auto operator=(const App&) -> App& = delete;
-    App(App&&)                         = delete;
-    auto operator=(App&&) -> App&      = delete;
-
-    template <Plugin Plugin, typename... Args>
-    auto add_plugin(Args&&... args) -> App&
-    {
-      Plugin plugin{std::forward<Args>(args)...};
-      plugin.build(*this);
-      return *this;
-    }
-
-    template <typename T>
-    auto insert_resource(std::type_identity_t<T> resource) -> App&
-    {
-      resources_[std::type_index(typeid(T))] = std::move(resource);
-      return *this;
-    }
-
-    template <typename T>
-    auto remove_resource() -> App&
-    {
-      resources_.erase(std::type_index(typeid(T)));
-      return *this;
-    }
-
-    template <typename T>
-    [[nodiscard]] auto resource(std::source_location location = std::source_location::current()) -> Option<T>
-    {
-      auto it = resources_.find(std::type_index(typeid(T)));
-      if (it == resources_.end())
-      {
-        return Option<T>{location};
-      }
-      auto* value = std::any_cast<T>(&it->second);
-      if (value == nullptr)
-      {
-        return Option<T>{location};
-      }
-
-      return Option<T>{*value};
-    }
-
-    template <typename T>
-    [[nodiscard]] auto has_resource() const -> bool
-    {
-      return resources_.contains(std::type_index(typeid(T)));
-    }
-
-    template <typename F>
-    auto add_system(Schedule schedule, F system, std::source_location location = std::source_location::current())
-        -> App&;
-
-    // Defined out-of-line below, once Diagnostics/print_diagnostic exist.
-    void execute();
-
-    void request_exit() { running_ = false; }
-
-  private:
-    template <typename F>
-    struct function_traits : function_traits<decltype(&F::operator())>
-    {
-    };
-
-    template <typename C, typename R, typename... Args>
-    struct function_traits<R (C::*)(Args...)>
-    {
-      using args = std::tuple<Args...>;
-    };
-
-    template <typename C, typename R, typename... Args>
-    struct function_traits<R (C::*)(Args...) const>
-    {
-      using args = std::tuple<Args...>;
-    };
-
-    template <typename Arg>
-    auto resolve_parameter(SystemInfo info) -> Arg;
-
-    template <typename F, typename... Args>
-    auto make_system_impl(SystemInfo info, F system, std::tuple<Args...>* /*unused*/) -> System;
-
-    template <typename F>
-    auto make_system(SystemInfo info, F system) -> System;
-
-    void run_schedule(Schedule schedule)
-    {
-      for (auto& system : systems_[schedule])
-      {
-        system(*this);
-      }
-    }
-
-    bool running_ = false;
-    std::unordered_map<std::type_index, std::any> resources_;
-    std::unordered_map<Schedule, std::vector<System>> systems_;
-  };
-
-  struct Time
-  {
-    f64 delta_seconds   = 0.0;
-    f64 elapsed_seconds = 0.0;
-    u32 frame_count     = 0;
-  };
 
   enum class Severity : u8
   {
@@ -208,7 +98,6 @@ export namespace engine
     return "UNKNOWN";
   }
 
-  // Plain text, not a platform API, so it's fine here (unlike SetConsoleMode).
   [[nodiscard]] constexpr auto severity_color(Severity severity) -> std::string_view
   {
     switch (severity)
@@ -239,32 +128,40 @@ export namespace engine
   inline void print_diagnostic(const DiagnosticMessage& entry)
   {
     std::string_view path = entry.location.file_name();
-    auto file_start        = path.find_last_of("/\\");
-    std::string_view file  = file_start == std::string_view::npos ? path : path.substr(file_start + 1);
-    auto tag_end           = file.find('.');
-    std::string_view tag   = tag_end == std::string_view::npos ? file : file.substr(0, tag_end);
+    auto file_start       = path.find_last_of("/\\");
+    std::string_view file = file_start == std::string_view::npos ? path : path.substr(file_start + 1);
+    auto tag_end          = file.find('.');
+    std::string_view tag  = tag_end == std::string_view::npos ? file : file.substr(0, tag_end);
     std::cout << severity_color(entry.severity) << "[" << tag << "][" << severity_name(entry.severity) << "] " << file
-              << ":" << entry.location.line() << ": " << entry.text << SEVERITY_COLOR_RESET << std::endl;
+              << ":" << entry.location.line() << ": " << entry.text << SEVERITY_COLOR_RESET << '\n';
   }
 
   struct ReportFormat
   {
     std::string_view fmt;
-    std::source_location location;
+    std::source_location loc;
 
     template <typename T>
-    constexpr ReportFormat(const T& format, std::source_location loc = std::source_location::current())
-        : fmt(format), location(loc)
+    constexpr ReportFormat(const T& format, std::source_location location = std::source_location::current())
+        : fmt(format), loc(location)
     {
     }
   };
 
   struct Diagnostics
   {
+    Diagnostics()  = default;
+    ~Diagnostics() = default;
+
+    Diagnostics(const Diagnostics&)                        = delete;
+    auto operator=(const Diagnostics&) -> Diagnostics&     = delete;
+    Diagnostics(Diagnostics&&) noexcept                    = default;
+    auto operator=(Diagnostics&&) noexcept -> Diagnostics& = default;
+
     template <typename... Args>
-    void report(Severity severity, ReportFormat fmt, Args&&... args)
+    void report(Severity severity, ReportFormat fmt, const Args&... args)
     {
-      push(severity, std::vformat(fmt.fmt, std::make_format_args(args...)), fmt.location);
+      push(severity, std::vformat(fmt.fmt, std::make_format_args(args...)), fmt.loc);
     }
 
     // Skips vformat, for text that's already formatted and may contain
@@ -293,7 +190,7 @@ export namespace engine
       if (severity == Severity::Fatal)
       {
         drain_unprinted(print_diagnostic);
-        assert(false && "fatal diagnostic reported");
+        std::abort();
       }
     }
 
@@ -301,141 +198,190 @@ export namespace engine
     std::size_t printed_ = 0;
   };
 
-  // Aborts with a clear message if CorePlugin wasn't added.
-  inline auto diagnostics_or_abort(App& app, std::source_location location = std::source_location::current())
-      -> Diagnostics&
+  struct Time
   {
-    auto diagnostics = app.resource<Diagnostics>(location);
-    if (!diagnostics)
-    {
-      std::cerr << "[engine][FATAL] Diagnostics resource missing. CorePlugin must be added before any other plugin\n";
-      assert(false && "Diagnostics resource missing");
-    }
-    return *diagnostics;
-  }
+    f64 delta_seconds   = 0.0; // real wall-clock time for this frame
+    f64 elapsed_seconds = 0.0; // real time since startup
+    u32 frame_count     = 0;   // frames executed
 
-  class CorePlugin
+    f64 fixed_delta_seconds   = 0.0; // fixed step duration: 1 / 60 s
+    f64 fixed_elapsed_seconds = 0.0; // simulation time accumulated in fixed steps
+    u64 fixed_frame_count     = 0;   // fixed steps executed
+    f64 render_alpha          = 0.0; // [0,1): interpolation fraction between fixed steps
+  };
+
+  class App
   {
   public:
-    static void build(App& app);
+    App() : last_tick_(Clock::now())
+    {
+      insert_resource<Diagnostics>({});
+      insert_resource<Time>({});
+    }
+    ~App() = default;
+
+    App(const App&)                    = delete;
+    auto operator=(const App&) -> App& = delete;
+    App(App&&)                         = delete;
+    auto operator=(App&&) -> App&      = delete;
+
+    template <Plugin Plugin, typename... Args>
+    auto add_plugin(Args&&... args) -> App&
+    {
+      Plugin plugin{std::forward<Args>(args)...};
+      plugin.build(*this);
+      return *this;
+    }
+
+    auto add_system(Schedule schedule, System system) -> App&
+    {
+      systems_[schedule].push_back(std::move(system));
+      return *this;
+    }
+
+    template <typename T>
+    auto insert_resource(std::type_identity_t<T> resource) -> App&
+    {
+      resources_[std::type_index(typeid(T))] = std::make_shared<T>(std::move(resource));
+      return *this;
+    }
+
+    template <typename T>
+    auto remove_resource() -> App&
+    {
+      resources_.erase(std::type_index(typeid(T)));
+      return *this;
+    }
+
+    template <typename T>
+    [[nodiscard]] auto has_resource() const -> bool
+    {
+      return resources_.contains(std::type_index(typeid(T)));
+    }
+
+    // Reference to a resource that may or may not exist.
+    template <typename T>
+    [[nodiscard]] auto resource(std::source_location location = std::source_location::current()) -> Option<T>
+    {
+      auto it = resources_.find(std::type_index(typeid(T)));
+      if (it == resources_.end())
+      {
+        return Option<T>{location};
+      }
+      auto* holder = std::any_cast<std::shared_ptr<T>>(&it->second);
+      if (holder == nullptr)
+      {
+        return Option<T>{location};
+      }
+
+      return Option<T>{**holder};
+    }
+
+    // Reference to a resource that must exist.
+    template <typename T>
+    [[nodiscard]] auto require_resource(std::source_location location = std::source_location::current()) -> T&
+    {
+      auto option = resource<T>(location);
+      if (!option)
+      {
+        report_missing_required_resource(std::format("required resource `{}` missing", typeid(T).name()), location);
+      }
+      return *option;
+    }
+
+    void execute();
+
+    [[nodiscard]] auto is_running() const -> bool { return running_; }
+
+    void request_exit() { running_ = false; }
+
+    template <typename... Args>
+    void report(Severity severity, ReportFormat fmt, Args&&... args)
+    {
+      require_resource<Diagnostics>().report(severity, fmt, std::forward<Args>(args)...);
+    }
+
+  private:
+    void run_schedule(Schedule schedule)
+    {
+      for (auto& system : systems_[schedule])
+      {
+        system(*this);
+      }
+    }
+
+    void report_missing_required_resource(std::string detail, std::source_location location);
+
+    bool running_ = false;
+    Clock::time_point last_tick_;
+    f64 accumulator_ = 0.0;
+    std::unordered_map<std::type_index, std::any> resources_;
+    std::unordered_map<Schedule, std::vector<System>> systems_;
   };
 
 } // namespace engine
 
 namespace engine
 {
-
-  template <typename Arg>
-  auto App::resolve_parameter(SystemInfo info) -> Arg
+  void App::report_missing_required_resource(std::string detail, std::source_location location)
   {
-    using Bare = std::remove_cvref_t<Arg>;
-    if constexpr (std::is_same_v<Bare, App>)
+    if (auto diagnostics = resource<Diagnostics>(location); diagnostics)
     {
-      return *this;
+      diagnostics->report_verbatim(Severity::Fatal, std::move(detail), location);
+      return;
     }
-    else if constexpr (std::is_constructible_v<Bare, App&>)
-    {
-      return Bare{*this};
-    }
-    else if constexpr (IS_OPTION_V<Bare>)
-    {
-      return resource<typename is_option<Bare>::value_type>(info.location);
-    }
-    else
-    {
-      auto option = resource<Bare>(info.location);
-      if (!option)
-      {
-        // Aborts inside report_verbatim.
-        diagnostics_or_abort(*this, info.location)
-            .report_verbatim(
-                Severity::Fatal,
-                std::format(
-                    "system in Schedule::{} requires missing resource `{}`", schedule_name(info.schedule),
-                    typeid(Bare).name()
-                ),
-                info.location
-            );
-      }
-      return *option;
-    }
-  }
 
-  template <typename F, typename... Args>
-  auto App::make_system_impl(SystemInfo info, F system, std::tuple<Args...>* /*unused*/) -> System
-  {
-    return [info, system = std::move(system)](App& app) mutable -> void
-    {
-      (void)info; // unused when the system takes no resource parameters
-      system(app.resolve_parameter<Args>(info)...);
-    };
-  }
-
-  template <typename F>
-  auto App::make_system(SystemInfo info, F system) -> System
-  {
-    using Args = typename function_traits<F>::args;
-    return make_system_impl(info, std::move(system), static_cast<Args*>(nullptr));
-  }
-
-  template <typename F>
-  auto App::add_system(Schedule schedule, F system, std::source_location location) -> App&
-  {
-    systems_[schedule].push_back(
-        make_system(SystemInfo{.schedule = schedule, .location = location}, std::move(system))
-    );
-    return *this;
+    print_diagnostic(DiagnosticMessage{.severity = Severity::Fatal, .text = std::move(detail), .location = location});
+    std::abort();
   }
 
   void App::execute()
   {
-    run_schedule(Schedule::Startup);
+    constexpr f64 fixed_delta = 1.0 / 60.0;
+    constexpr u32 max_steps   = 5;
 
+    run_schedule(Schedule::Startup);
     running_ = true;
+
+    auto& time        = require_resource<Time>();
+    auto& diagnostics = require_resource<Diagnostics>();
+
     while (running_)
     {
+      const auto now     = Clock::now();
+      time.delta_seconds = std::chrono::duration<f64>(now - last_tick_).count();
+      time.elapsed_seconds += time.delta_seconds;
+      time.frame_count += 1;
+      last_tick_ = now;
+
+      time.fixed_delta_seconds = fixed_delta;
+
+      accumulator_ += time.delta_seconds;
+      const auto max_step_time = static_cast<f64>(max_steps) * fixed_delta;
+      accumulator_             = std::min(accumulator_, max_step_time);
+
       run_schedule(Schedule::PreUpdate);
+
+      u32 steps = 0;
+      while (running_ && accumulator_ >= fixed_delta && steps < max_steps)
+      {
+        run_schedule(Schedule::FixedUpdate);
+        time.fixed_elapsed_seconds += fixed_delta;
+        time.fixed_frame_count += 1;
+        accumulator_ -= fixed_delta;
+        ++steps;
+      }
+      time.render_alpha = accumulator_ / fixed_delta;
+
       run_schedule(Schedule::Update);
       run_schedule(Schedule::PostUpdate);
       run_schedule(Schedule::Render);
+
+      diagnostics.drain_unprinted(print_diagnostic);
     }
 
     run_schedule(Schedule::Shutdown);
-
-    // No PreUpdate runs after this, so flush anything reported in Shutdown.
-    if (auto diagnostics = resource<Diagnostics>(); diagnostics)
-    {
-      diagnostics->drain_unprinted(print_diagnostic);
-    }
-  }
-
-  namespace
-  {
-    using Clock = std::chrono::steady_clock;
-  } // namespace
-
-  void CorePlugin::build(App& app)
-  {
-    app.insert_resource<Time>({});
-    app.insert_resource<Diagnostics>({});
-
-    app.add_system(Schedule::Startup, [](App& app) -> void { app.insert_resource<Clock::time_point>(Clock::now()); });
-
-    app.add_system(
-        Schedule::PreUpdate,
-        [](Clock::time_point& last_tick, Time& time) -> void
-        {
-          const auto now     = Clock::now();
-          time.delta_seconds = std::chrono::duration<f64>(now - last_tick).count();
-          time.elapsed_seconds += time.delta_seconds;
-          time.frame_count += 1;
-          last_tick = now;
-        }
-    );
-
-    app.add_system(
-        Schedule::PreUpdate, [](Diagnostics& diagnostics) -> void { diagnostics.drain_unprinted(print_diagnostic); }
-    );
+    diagnostics.drain_unprinted(print_diagnostic);
   }
 
 } // namespace engine

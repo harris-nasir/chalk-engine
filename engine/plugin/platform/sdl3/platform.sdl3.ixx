@@ -5,7 +5,6 @@ module;
 
 export module engine.platform.sdl3;
 
-import engine.command;
 import engine.core;
 import engine.platform;
 
@@ -30,7 +29,7 @@ namespace engine
 
   void PlatformSDL3Plugin::build(App& app)
   {
-    auto& diagnostics = diagnostics_or_abort(app);
+    auto& diagnostics = app.require_resource<Diagnostics>();
 
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
@@ -70,8 +69,10 @@ namespace engine
 
     app.add_system(
         Schedule::PreUpdate,
-        [](Window& window, ExitControl exit) -> void
+        [](App& app) -> void
         {
+          auto& window = app.require_resource<Window>();
+
           SDL_Event event;
           while (SDL_PollEvent(&event))
           {
@@ -82,18 +83,18 @@ namespace engine
           }
           if (window.should_close)
           {
-            exit.request();
+            app.request_exit();
           }
         }
     );
 
     app.add_system(
         Schedule::Shutdown,
-        [sdl_window = window](Commands cmd) -> void
+        [sdl_window = window](App& app) -> void
         {
           SDL_DestroyWindow(sdl_window);
           SDL_Quit();
-          cmd.report(Severity::Info, "window closed");
+          app.report(Severity::Info, "window closed");
         }
     );
   }
