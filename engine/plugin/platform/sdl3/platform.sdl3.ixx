@@ -45,10 +45,9 @@ namespace engine
     }
 
     app.insert_resource<Window>({
-        .title        = description_.title,
-        .width        = description_.width,
-        .height       = description_.height,
-        .should_close = false,
+        .title  = description_.title,
+        .width  = description_.width,
+        .height = description_.height,
     });
 
 #ifdef SDL_PLATFORM_WIN32
@@ -81,9 +80,10 @@ namespace engine
               window.should_close = true;
             }
           }
+
           if (window.should_close)
           {
-            app.request_exit();
+            app.exit();
           }
         }
     );

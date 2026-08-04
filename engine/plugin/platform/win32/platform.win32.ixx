@@ -23,17 +23,48 @@ export namespace engine
   };
 } // namespace engine
 
+namespace
+{
+  auto CALLBACK window_procedure(HWND window, UINT message, WPARAM w_param, LPARAM l_param) -> LRESULT
+  {
+    switch (message)
+    {
+      case WM_CLOSE:
+      {
+        PostQuitMessage(0);
+        break;
+      }
+
+      default:
+      {
+        return DefWindowProc(window, message, w_param, l_param);
+      }
+    }
+
+    return 0;
+  }
+} // namespace
+
 namespace engine
 {
+
   void PlatformWin32Plugin::build(App& app)
   {
     auto& diagnostics = app.require_resource<Diagnostics>();
 
-    WNDCLASSEX window_class{};
-    window_class.cbSize        = sizeof(WNDCLASSEX);
-    window_class.lpszClassName = "Win32Window";
-    window_class.lpfnWndProc   = DefWindowProc;
+    WNDCLASSEX window_class{
+        .cbSize        = sizeof(WNDCLASSEX),
+        .lpfnWndProc   = &window_procedure,
+        .hIcon         = LoadIcon(nullptr, IDI_APPLICATION),
+        .hCursor       = LoadCursor(nullptr, IDC_ARROW),
+        .lpszClassName = "Win32Window",
+    };
     auto window_class_id{RegisterClassEx(&window_class)};
+
+    if (window_class_id == 0U)
+    {
+      diagnostics.report(Severity::Fatal, "Failed to register window class: {}", GetLastError());
+    }
 
     RECT rect{
         .left   = 0,
@@ -43,7 +74,7 @@ namespace engine
     };
     AdjustWindowRect(&rect, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, 0);
 
-    CreateWindowEx(
+    auto* window{CreateWindowEx(
         0,
         MAKEINTATOM(window_class_id),
         description_.title.c_str(),
@@ -56,8 +87,55 @@ namespace engine
         nullptr,
         nullptr,
         nullptr
+    )};
+
+    if (window == nullptr)
+    {
+      diagnostics.report(Severity::Fatal, "Failed to create window: {}", GetLastError());
+    }
+
+    app.insert_resource<Window>({
+        .title  = description_.title,
+        .width  = description_.width,
+        .height = description_.height,
+    });
+
+    app.insert_resource<NativeWindowHandle>({.kind = NativeWindowKind::Win32, .handle = window});
+
+    diagnostics.report(
+        Severity::Info, "opened window \"{}\" ({}x{})", description_.title, description_.width, description_.height
     );
 
-    diagnostics.report(Severity::Debug, "Window Class ID: {}", window_class_id);
+    ShowWindow(window, SW_SHOW);
+
+    app.add_system(
+        Schedule::PreUpdate,
+        [](App& app) -> void
+        {
+          auto& window = app.require_resource<Window>();
+
+          MSG message{};
+          while (PeekMessage(&message, nullptr, 0, 0, PM_REMOVE))
+          {
+            TranslateMessage(&message);
+            DispatchMessage(&message);
+          }
+
+          if (message.message == WM_QUIT)
+          {
+            window.should_close = true;
+            app.exit();
+          }
+        }
+    );
+
+    app.add_system(
+        Schedule::Shutdown,
+        [window](App& app) -> void
+        {
+          DestroyWindow(window);
+          app.report(Severity::Info, "window closed");
+        }
+    );
   }
 } // namespace engine
