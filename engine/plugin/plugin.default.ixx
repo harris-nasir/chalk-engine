@@ -5,9 +5,13 @@ module;
 export module engine.plugin_default;
 
 import engine.core;
+
 import engine.platform;
 import engine.platform.sdl3;
 import engine.platform.win32;
+
+import engine.renderer;
+import engine.renderer.dx11;
 
 export namespace engine
 {
@@ -32,6 +36,8 @@ namespace engine
   {
     app.add_plugin<PlatformWin32Plugin>(description_);
     // app.add_plugin<PlatformSDL3Plugin>(description_);
+
+    app.add_plugin<RendererDX11Plugin>();
   }
 
 } // namespace engine

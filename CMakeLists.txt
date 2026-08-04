@@ -33,7 +33,7 @@ target_sources(${PROJECT_NAME}
   FILES ${MODULE_SOURCES}
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3)
+target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3 d3d11)
 
 set_project_warnings(${PROJECT_NAME})
 
