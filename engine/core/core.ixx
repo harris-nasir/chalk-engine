@@ -291,9 +291,9 @@ export namespace engine
 
     void execute();
 
-    [[nodiscard]] auto is_running() const -> bool { return running_; }
+    [[nodiscard]] auto is_running() const -> bool { return is_running_; }
 
-    void request_exit() { running_ = false; }
+    void exit() { is_running_ = false; }
 
     template <typename... Args>
     void report(Severity severity, ReportFormat fmt, Args&&... args)
@@ -312,7 +312,7 @@ export namespace engine
 
     void report_missing_required_resource(std::string detail, std::source_location location);
 
-    bool running_ = false;
+    bool is_running_ = false;
     Clock::time_point last_tick_;
     f64 accumulator_ = 0.0;
     std::unordered_map<std::type_index, std::any> resources_;
@@ -341,12 +341,12 @@ namespace engine
     constexpr u32 max_steps   = 5;
 
     run_schedule(Schedule::Startup);
-    running_ = true;
+    is_running_ = true;
 
     auto& time        = require_resource<Time>();
     auto& diagnostics = require_resource<Diagnostics>();
 
-    while (running_)
+    while (is_running_)
     {
       const auto now     = Clock::now();
       time.delta_seconds = std::chrono::duration<f64>(now - last_tick_).count();
@@ -363,7 +363,7 @@ namespace engine
       run_schedule(Schedule::PreUpdate);
 
       u32 steps = 0;
-      while (running_ && accumulator_ >= fixed_delta && steps < max_steps)
+      while (accumulator_ >= fixed_delta && steps < max_steps)
       {
         run_schedule(Schedule::FixedUpdate);
         time.fixed_elapsed_seconds += fixed_delta;
