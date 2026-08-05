@@ -5,6 +5,7 @@ module;
 #include <wrl.h>
 
 #include <algorithm>
+#include <array>
 #include <d3d11.h>
 
 export module engine.renderer.dx11;
@@ -29,19 +30,41 @@ namespace
   struct Swapchain
   {
     Microsoft::WRL::ComPtr<IDXGISwapChain> handle;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> render_target_view;
+  };
+
+  struct DeviceContext
+  {
+    Microsoft::WRL::ComPtr<ID3D11Device> device; // high level rendering device
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> immediate_context;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> deferred_context; // records commands, played on immediate context
   };
 
   struct State
   {
     UINT create_device_flags{};
     D3D_FEATURE_LEVEL feature_level{};
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-    Microsoft::WRL::ComPtr<ID3D11Device> device;       // high level rendering device
     Microsoft::WRL::ComPtr<IDXGIDevice> dxgi_device;   // device bound to a gpu
     Microsoft::WRL::ComPtr<IDXGIAdapter> dxgi_adapter; // represents a gpu
     Microsoft::WRL::ComPtr<IDXGIFactory> dxgi_factory; // manages adapter & creates swapchain
     Swapchain swapchain;
+    DeviceContext device_context;
   };
+
+  // Finishes the command list recorded on the deferred context this frame,
+  // then plays it back on the immediate context (only the immediate context
+  // can execute a command list against the GPU).
+  void execute_command_list(engine::App& app, const State& state)
+  {
+    Microsoft::WRL::ComPtr<ID3D11CommandList> command_list;
+    if (auto result = state.device_context.deferred_context->FinishCommandList(false, &command_list); FAILED(result))
+    {
+      app.report(engine::Severity::Fatal, "Failed to finish command list: {}", result);
+    }
+
+    state.device_context.immediate_context->ExecuteCommandList(command_list.Get(), false);
+  }
+
 } // namespace
 
 namespace engine
@@ -53,8 +76,8 @@ namespace engine
         Schedule::Startup,
         [](App& app) -> void
         {
-          auto& window        = app.require_resource<Window>();
-          auto& native_window = app.require_resource<NativeWindowHandle>();
+          auto& window{app.require_resource<Window>()};
+          auto& native_window{app.require_resource<NativeWindowHandle>()};
 
           State state{};
 
@@ -70,16 +93,17 @@ namespace engine
                   nullptr,
                   0,
                   D3D11_SDK_VERSION,
-                  &state.device,
+                  &state.device_context.device,
                   &state.feature_level,
-                  &state.context
+                  &state.device_context.immediate_context
               );
               FAILED(result))
           {
             app.report(Severity::Fatal, "Failed to create graphics context: {}", result);
           }
 
-          if (auto result = state.device->QueryInterface(IID_PPV_ARGS(&state.dxgi_device)); FAILED(result))
+          if (auto result = state.device_context.device->QueryInterface(IID_PPV_ARGS(&state.dxgi_device));
+              FAILED(result))
           {
             app.report(Severity::Fatal, "Failed to retreive dxgi device: {}", result);
           }
@@ -117,11 +141,33 @@ namespace engine
               .Flags        = 0
           };
 
-          if (auto result
-              = state.dxgi_factory->CreateSwapChain(state.device.Get(), &description, &state.swapchain.handle);
+          if (auto result = state.dxgi_factory->CreateSwapChain(
+                  state.device_context.device.Get(), &description, &state.swapchain.handle
+              );
               FAILED(result))
           {
             app.report(Severity::Fatal, "Failed to create Swapchain: {}", result);
+          }
+
+          Microsoft::WRL::ComPtr<ID3D11Texture2D> buffer{};
+          if (auto result = state.swapchain.handle->GetBuffer(0, IID_PPV_ARGS(&buffer)); FAILED(result))
+          {
+            app.report(Severity::Fatal, "Failed to get buffer from Swapchain: {}", result);
+          }
+
+          if (auto result = state.device_context.device->CreateRenderTargetView(
+                  buffer.Get(), nullptr, &state.swapchain.render_target_view
+              );
+              FAILED(result))
+          {
+            app.report(Severity::Fatal, "Failed to create Render Target View: {}", result);
+          }
+
+          if (auto result
+              = state.device_context.device->CreateDeferredContext(0, &state.device_context.deferred_context);
+              FAILED(result))
+          {
+            app.report(Severity::Fatal, "Failed to create Deferred Context: {}", result);
           }
 
           app.insert_resource<State>(state); // TODO: split this struct into smaller resourecs
@@ -133,8 +179,23 @@ namespace engine
         Schedule::Render,
         [](App& app) -> void
         {
-          auto& window = app.require_resource<Window>();
-          auto& state  = app.require_resource<State>();
+          auto& state{app.require_resource<State>()};
+
+          std::array<FLOAT, 4> color{1, 0, 0, 1};
+          state.device_context.deferred_context->ClearRenderTargetView(
+              state.swapchain.render_target_view.Get(), color.data()
+          );
+
+          auto* rtv{state.swapchain.render_target_view.Get()};
+          state.device_context.deferred_context->OMSetRenderTargets(1, &rtv, nullptr);
+
+          execute_command_list(app, state);
+
+          bool is_vsync_enabled{false}; // TODO: put somewhere better
+          if (auto result = state.swapchain.handle->Present(is_vsync_enabled, 0); FAILED(result))
+          {
+            app.report(Severity::Fatal, "Failed to present swapchain: {}", result);
+          }
         }
     );
   }
