@@ -310,6 +310,15 @@ export namespace engine
       }
     }
 
+    void run_schedule_reversed(Schedule schedule)
+    {
+      auto& systems = systems_[schedule];
+      for (auto it = systems.rbegin(); it != systems.rend(); ++it)
+      {
+        (*it)(*this);
+      }
+    }
+
     void report_missing_required_resource(std::string detail, std::source_location location);
 
     bool is_running_ = false;
@@ -380,7 +389,7 @@ namespace engine
       diagnostics.drain_unprinted(print_diagnostic);
     }
 
-    run_schedule(Schedule::Shutdown);
+    run_schedule_reversed(Schedule::Shutdown);
     diagnostics.drain_unprinted(print_diagnostic);
   }
 
