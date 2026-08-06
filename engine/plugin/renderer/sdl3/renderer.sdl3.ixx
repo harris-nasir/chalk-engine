@@ -83,6 +83,7 @@ namespace
     SDL_GPUTexture* handle;
     u32 width;
     u32 height;
+    engine::PixelFormat format;
   };
 
   // Never a real HandleTable index (those start at 1 and grow one at a
@@ -120,6 +121,18 @@ namespace
         return SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT;
     }
     return SDL_GPU_TEXTUREFORMAT_INVALID;
+  }
+
+  [[nodiscard]] auto bytes_per_pixel(engine::PixelFormat format) -> u32
+  {
+    switch (format)
+    {
+      case engine::PixelFormat::RGBA8:
+      case engine::PixelFormat::BGRA8:
+      case engine::PixelFormat::Depth24Stencil8:
+        return 4;
+    }
+    return 4;
   }
 
   [[nodiscard]] auto to_sdl_texture_usage(engine::TextureUsage usage) -> SDL_GPUTextureUsageFlags
@@ -463,9 +476,9 @@ namespace engine
       app_.report(Severity::Error, "SDL_CreateGPUTexture failed: {}", SDL_GetError());
       return TextureHandle::Invalid;
     }
-    return static_cast<TextureHandle>(
-        textures_.insert(TextureRecord{.handle = texture, .width = description.width, .height = description.height})
-    );
+    return static_cast<TextureHandle>(textures_.insert(TextureRecord{
+        .handle = texture, .width = description.width, .height = description.height, .format = description.format
+    }));
   }
 
   auto SDL3Renderer::destroy_texture(TextureHandle handle) -> void
@@ -671,6 +684,12 @@ namespace engine
       app_.report(Severity::Error, "submit: frame handle does not match the current frame");
       return;
     }
+    if (render_pass_ != nullptr || copy_pass_ != nullptr)
+    {
+      app_.report(Severity::Error, "submit: called with a pass still open; call end_pass/end_copy_pass first");
+      render_pass_ = nullptr;
+      copy_pass_   = nullptr;
+    }
     if (!SDL_SubmitGPUCommandBuffer(frame_command_buffer_))
     {
       app_.report(Severity::Error, "SDL_SubmitGPUCommandBuffer failed: {}", SDL_GetError());
@@ -796,8 +815,9 @@ namespace engine
     SDL_GPUTextureTransferInfo source{
         .transfer_buffer = transfer_buffer,
         .offset          = 0,
-        .pixels_per_row  = bytes_per_row,
-        .rows_per_layer  = record->height,
+        // pixels_per_row is a pixel count; bytes_per_row is a byte pitch.
+        .pixels_per_row = bytes_per_row / bytes_per_pixel(record->format),
+        .rows_per_layer = record->height,
     };
     // Region width/height come from the texture's own stored dimensions
     // (set at create_texture time), not from bytes_per_row: bytes-per-row
