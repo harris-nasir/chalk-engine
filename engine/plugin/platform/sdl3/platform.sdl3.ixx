@@ -50,6 +50,9 @@ namespace engine
         .height = description_.height,
     });
 
+    // lets an SDL3-based renderer reuse this window directly instead of wrapping NativeWindowHandle.
+    app.insert_resource<SDL_Window*>(window);
+
 #ifdef SDL_PLATFORM_WIN32
     void* native_handle
         = SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
