@@ -36,8 +36,34 @@ namespace engine
       diagnostics.report(Severity::Fatal, "SDL_Init failed: {}", SDL_GetError());
     }
 
+    SDL_WindowFlags flags = 0;
+    if (description_.is_fullscreen)
+    {
+      flags |= SDL_WINDOW_FULLSCREEN;
+    }
+    if (description_.is_hidden)
+    {
+      flags |= SDL_WINDOW_HIDDEN;
+    }
+    if (description_.is_borderless)
+    {
+      flags |= SDL_WINDOW_BORDERLESS;
+    }
+    if (description_.is_minimized)
+    {
+      flags |= SDL_WINDOW_MINIMIZED;
+    }
+    if (description_.is_maximized)
+    {
+      flags |= SDL_WINDOW_MAXIMIZED;
+    }
+    if (description_.is_resizeable)
+    {
+      flags |= SDL_WINDOW_RESIZABLE;
+    }
+
     SDL_Window* window = SDL_CreateWindow(
-        description_.title.c_str(), static_cast<int>(description_.width), static_cast<int>(description_.height), 0
+        description_.title.c_str(), static_cast<int>(description_.width), static_cast<int>(description_.height), flags
     );
     if (window == nullptr)
     {
@@ -45,9 +71,15 @@ namespace engine
     }
 
     app.insert_resource<Window>({
-        .title  = description_.title,
-        .width  = description_.width,
-        .height = description_.height,
+        .title          = description_.title,
+        .width          = description_.width,
+        .height         = description_.height,
+        .is_fullscreen  = description_.is_fullscreen,
+        .is_hidden      = description_.is_hidden,
+        .is_borderless  = description_.is_borderless,
+        .is_minimized   = description_.is_minimized,
+        .is_maximized   = description_.is_maximized,
+        .is_resizeable  = description_.is_resizeable,
     });
 
     // lets an SDL3-based renderer reuse this window directly instead of wrapping NativeWindowHandle.
@@ -78,9 +110,24 @@ namespace engine
           SDL_Event event;
           while (SDL_PollEvent(&event))
           {
-            if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
+            switch (event.type)
             {
-              window.should_close = true;
+              case SDL_EVENT_WINDOW_RESIZED:
+              {
+                window.width  = static_cast<u32>(event.window.data1);
+                window.height = static_cast<u32>(event.window.data2);
+                break;
+              }
+              case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+              case SDL_EVENT_QUIT:
+              {
+                window.should_close = true;
+                break;
+              }
+              default:
+              {
+                break;
+              }
             }
           }
 

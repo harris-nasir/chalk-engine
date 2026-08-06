@@ -1,0 +1,445 @@
+CHALK RENDERER CONTRACT - CONVERSATION HANDOFF NOTES
+=====================================================
+Date: 2026-08-06
+Purpose: Capture every decision, pivot, reasoning and argument from the
+renderer-contract design conversation, so a fresh agent can vet the design and
+continue the work without losing context.
+
+=====================================================================
+1. THE PROJECT AND THE GOAL
+=====================================================================
+
+chalk is a C++26 game engine, built with C++ modules (.ixx files) and a
+Bevy-style plugin architecture:
+
+  - engine/core: App, Schedule, Plugin concept, systems, resources, diagnostics.
+  - engine/plugin/*: one module per feature (platform, renderer, audio,
+    input, physics, math). Plugins are added at the composition root.
+  - A backend is a plugin that implements the renderer contract.
+
+The goal (locked, repeated many times by the user):
+
+  - Define an `engine.renderer` CONTRACT that every renderer backend
+    implements: SDL3 GPU today, DX11 later, a software/CPU renderer even
+    later. If you implement the contract functions, your renderer is a
+    drop-in replacement.
+  - Every backend must produce IDENTICAL pixel output (software and GPU
+    must look the same).
+  - The contract must be PRIMITIVES - the same kind of surface real
+    renderer backends expose (OpenGL / Vulkan / SDL3 GPU / DX12) - so that
+    ANY feature (sprites, text, meshes, cameras, post-processing,
+    animation) can be built on top of it in separate plugins, without
+    restrictions, and without the contract needing changes or regressing.
+  - The end goal of the engine is a PERFORMANT, HIGH-QUALITY 3D RACING
+    SIMULATOR (Assetto Corsa class). Every design decision must keep this
+    in mind.
+  - ECS is GAME-SIDE management, orthogonal to the renderer contract. The
+    renderer contract must not depend on or assume an ECS.
+
+=====================================================================
+2. HOW WE GOT HERE - TIMELINE OF DECISIONS AND PIVOTS
+=====================================================================
+
+PHASE 1 - Bevy-style plugin vision
+----------------------------------
+- User wants: renderer plugin is the BASE plugin; other plugins (sprite,
+  camera, animation, ...) build on top of it using its API. Similar to
+  Bevy. The engine only knows about the plugins it registered; any
+  functionality requires a plugin (created or extended).
+- ECS: user considered flecs or manual data structures, maybe no ECS at
+  all. Conclusion later: ECS is game-side; it will not drive the renderer
+  contract. A game-side ECS plugin can be added to default plugins later
+  (flecs or entt question raised, deferred - see section 10).
+
+PHASE 2 - Command-list design (SHIPPED, THEN ABANDONED)
+-------------------------------------------------------
+- First concrete shape: an open command list.
+  - FrameCommands resource: std::vector<std::any>, push() accepts any
+    "RenderCommand" (trivially copyable data structs).
+  - Game code NEVER pushes commands. Game code sets DATA (resources).
+    Feature plugins convert data -> commands in Render systems.
+    The backend is the only reader of the command list.
+  - ClearColor resource: game code sets it; the backend reads it each
+    frame and clears. "Inserting ClearColor" does NOT register a command -
+    the backend's already-registered PostRender system reads it every
+    frame.
+  - Unknown command type -> report Severity::Error once per type per
+    frame, skip, never crash.
+  - Schedule gained a PostRender phase (Render -> PostRender -> loop) so
+    the backend executes after feature plugins record.
+- Implemented and verified with a Pong game (see section 4), then the
+  user became unsatisfied and the code was gutted (see section 4).
+
+PHASE 3 - Pivots that led to the current direction
+--------------------------------------------------
+- User rejected game-level command pushing: "i dont want to be pushing
+  commands like this i.e frame.push(clear); it doesnt feel right."
+- User wanted a sprite plugin like Bevy's sprite plugin: it provides a
+  Sprite resource usable from any game code; the PLUGIN does the
+  texture/quad implementation itself. Game code like:
+      struct Player { engine::Sprite sprite; ... };
+  and mutating player.sprite.x etc. The user wanted to SEE the final game
+  code to approve the API shape.
+- User proposed making a simple game (Pong) with raw SDL3 first, and
+  extracting the API surface out of it - but general-purpose, not
+  Pong-shaped. This was done, then the user said "i dont like this" and
+  switched to the sprite-plugin approach. Pong was then rewritten on the
+  plugin approach.
+- User was still not fully satisfied and suggested a more substantial
+  game to define the design; this is still pending.
+- Series of quick picks by the user on option questions:
+  - Components-style game model (Godot-like / general engines):
+    sprite, transform, camera etc. should be COMPONENTS for game code.
+  - The engine only knows registered plugins; new functionality = new
+    or extended plugin.
+  - An ECS plugin can be added to default plugins later.
+  - Performance target: high-quality 3D racing sim (Assetto Corsa class).
+- BIG PIVOT - user's final framing:
+  "forget ecs thats game code related management. what we need is
+  contract for every renderer to implement and if i implement those
+  functions then it can be drop in replacement."
+  => ECS/scheduling is out of scope for the renderer contract. The
+     contract is a backend interface.
+
+PHASE 4 - "Primitives, not draw_quad" (current session)
+-------------------------------------------------------
+- User rejected the previous proposal of an interface with clear(),
+  draw_quad(), draw_text(): those are feature-level conveniences, NOT
+  renderer primitives. Real renderers (OpenGL/Vulkan/SDL3 GPU/DX12) do
+  not expose draw_quad/draw_text.
+- Agent agreed and laid out the primitive surface real renderers share:
+  resources (buffers, textures incl. render targets, samplers, shaders,
+  pipelines), frame lifecycle (begin frame -> submit -> present),
+  render pass (target + load/store ops; clear is a PASS PARAMETER, not a
+  standalone call - e.g. SDL_BeginGPURenderPass takes a clear color),
+  and draw commands (bind pipeline/buffers, set viewport, draw).
+- Three candidate shapes were presented:
+    A) Rendering-device contract (RECOMMENDED): opaque resource handles
+       + abstract Renderer interface + explicit command-list recording.
+    B) Immediate resource-based: same resources but no command list;
+       plugins call renderer.draw(...) directly; backend records
+       internally.
+    C) Submission API (bgfx-style): submit meshes+materials; renderer
+       sorts/batches internally.
+- User asked to explain A in detail; agent explained with code (section
+  6). User said "i think this is good, but i need to see more of the api
+  / code surface and usage", raised two concerns:
+    (1) a universal shader language that compiles to the shader language
+        each backend needs,
+    (2) "virtual interfaces that bad. cant we just use concepts that
+        enforce u to have those functions?" - prefers concepts over
+        virtual inheritance.
+- Both concerns are OPEN (not yet answered) - see sections 7 and 8.
+
+=====================================================================
+3. CURRENT CODEBASE STATE (as of this handoff)
+=====================================================================
+
+- engine/core/core.ixx: App, Schedule, Plugin concept, Diagnostics,
+  Time (fixed 60 Hz), System = std::function<void(App&)>.
+  Schedule already has PostRender wired after Render.
+  Plugin concept: requires(T plugin, App& app) { plugin.build(app); }.
+- engine/plugin/renderer/renderer.ixx: EXISTS BUT IS EMPTY (just an
+  empty exported module engine.renderer). The contract is unwritten.
+- engine/plugin/renderer/sdl3/renderer.sdl3.ixx: STUB ONLY - creates an
+  SDL_Window wrapper if needed, SDL_CreateRenderer, then a Render system
+  that clears RED and presents. Uses the SDL3 2D API (SDL_Renderer),
+  NOT the SDL3 GPU API (SDL_GPUDevice).
+- engine/plugin/renderer/dx11/renderer.dx11.ixx: exists (pre-existing
+  DX11 module with warnings; untouched).
+- The sprite plugin, text plugin, and Pong game were DELETED when the
+  command-list design was abandoned. source/ contains only main.cxx,
+  which runs App with DefaultPlugin (no renderer usage).
+- engine/engine.ixx facade exports: core, platform, renderer, audio,
+  input, physics, plugin_default. (Backend modules are NOT exported -
+  correct and intended.)
+- SDL3 3.2.0 is cached at external/sdl3/ (no network needed). Build:
+  cmake --preset clang / cmake --build --preset clang.
+
+=====================================================================
+4. WHAT WAS IMPLEMENTED AND VERIFIED (then deleted)
+=====================================================================
+
+Before the pivot to primitives, the command-list design was fully
+implemented and validated:
+
+- engine.renderer: Color{r,g,b,a: f32}, ClearColor, RenderCommand
+  concept (std::is_trivially_copyable_v<T>), FrameCommands
+  (std::vector<std::any> + push), fold-based dispatch.
+- engine.renderer.sprite: DrawQuad, game-facing Sprite (opaque white
+  default), SpriteStore (std::vector<Sprite*> + register_sprite),
+  SpritePlugin (Render system converts sprites to DrawQuad pushes).
+- engine.renderer.text: DrawText (std::array<char,64> text, truncating
+  set_text), Text, TextStore, TextPlugin.
+- engine.renderer.sdl3: startup creates SDL_Renderer; PostRender system:
+  clear from ClearColor -> dispatch<DrawQuad, DrawText> -> present ->
+  drain list. Unknown command -> Error once per type per frame.
+- source/pong.ixx: Pong game. Game code owns Sprite/Text data inside a
+  Pong resource, mutates them directly (e.g. pong.left.sprite.x),
+  registers visuals once, and NEVER touches the renderer. This
+  game-facing shape was APPROVED by the user and must be preserved.
+- Verified: Pong ran, exactly 5 commands/frame (4 sprites + 1 text),
+  zero dispatch errors, frame presented every frame.
+
+KEY DESIGN FACT (validated and approved): game code sets DATA, never
+talks to the renderer. Feature plugins convert data to render calls.
+The backend executes them. This boundary must survive the new design.
+
+=====================================================================
+5. CONSTRAINTS / OFF-LIMITS / PITFALLS (hard-won)
+=====================================================================
+
+- Game code must NEVER push commands (frame.push(clear) rejected) and
+  must never mention the renderer.
+- Clear is implicit frame lifecycle: game sets a ClearColor resource;
+  in the new design clear becomes the load-op/parameter of the final
+  render pass (SDL_BeginGPURenderPass takes a clear color).
+- DrawQuad/DrawText are feature-level, NOT renderer contract functions.
+  The contract is the primitive device surface.
+- The contract must support render targets (render-to-texture) from day
+  1 - bloom/SSR/motion blur (needed for AC-class graphics) are
+  render-to-texture features; adding pass-to-arbitrary-texture later
+  would be a breaking contract change.
+- Vertex layout in the contract must be backend-agnostic: byte offsets +
+  format enums (like SDL_GPUVertexAttribute), so DX11 input layouts and
+  Vulkan vertex attributes both map cleanly.
+- Registered sprite/text addresses must be stable (objects live inside
+  resource-held structs, never temporaries).
+- require_resource Fatal-asserts if missing: backends must insert their
+  renderer resource before feature plugins' Render systems run; plugin
+  order matters at the composition root.
+- SDL calls return bool; failures are reported via app.report with
+  Severity (Error vs Fatal), never silently ignored. Unimplemented
+  features: error, not crash (from the command-list era: unknown command
+  -> Error once per type per frame).
+- The engine facade (engine.ixx) exports contracts, never backends.
+- DX11 module warnings are pre-existing; leave them alone.
+
+=====================================================================
+6. THE CURRENT DIRECTION: OPTION A - RENDERING-DEVICE CONTRACT
+=====================================================================
+
+One abstract Renderer interface speaking only in opaque resource handles
+and explicit draw commands - the same vocabulary as Vulkan/DX12/SDL3 GPU.
+Backends implement it; everything else is plugins on top.
+
+Contract sketch (engine.renderer - the only module backends depend on):
+
+    // resources: opaque handles the renderer owns
+    struct BufferDesc   { u64 size; BufferUsage usage; };   // Vertex | Index | Uniform
+    struct TextureDesc  { u32 width, height; PixelFormat format; u32 usage; };
+    struct PipelineDesc { ShaderHandle vertex, fragment;
+                          std::span<VertexAttribute> layout;   // {location, offset, format}
+                          Topology topology; BlendState blend; DepthState depth; };
+
+    class Renderer {
+    public:
+      virtual ~Renderer() = default;
+      // resources (create once at startup)
+      virtual BufferHandle   create_buffer(const BufferDesc&) = 0;
+      virtual TextureHandle  create_texture(const TextureDesc&) = 0;
+      virtual void           upload_texture(TextureHandle, span<const u8>, u32 pitch) = 0;
+      virtual ShaderHandle   create_shader(ShaderSource) = 0;
+      virtual PipelineHandle create_pipeline(const PipelineDesc&) = 0;
+      // frame lifecycle
+      virtual FrameHandle begin_frame() = 0;                 // acquire swapchain image
+      virtual PassHandle  begin_pass(FrameHandle, const RenderPassDesc&) = 0; // target + clear color
+      virtual void        end_pass(PassHandle) = 0;
+      virtual void        submit(FrameHandle) = 0;           // submit + present
+      // recording draws inside a pass
+      virtual void bind_pipeline(PassHandle, PipelineHandle) = 0;
+      virtual void bind_vertex_buffer(PassHandle, BufferHandle, u32 stride) = 0;
+      virtual void push_uniforms(PassHandle, u32 slot, span<const u8> bytes) = 0;
+      virtual void draw(PassHandle, u32 vertex_count, u32 instance_count) = 0;
+    };
+
+Frame flow (one system - for now the backend's PostRender system, later
+a frame/camera plugin - owns begin_frame/begin_pass/submit; feature
+plugins only RECORD between begin and end):
+
+    begin_frame() -> begin_pass(swapchain, clear = ClearColor resource)
+      -> sprite plugin: bind sprite pipeline, bind quad VB, push uniform,
+         draw(6) per sprite
+      -> text plugin: bind text pipeline, draw glyph quads
+    -> end_pass() -> submit() [presents]
+
+SpritePlugin on top of A:
+  - Startup: create a unit-quad vertex buffer, a 1x1 white texture, a
+    sprite pipeline (unlit shader + {pos: vec2, uv: vec2} layout + alpha
+    blend). THIS is the "texture/quad stuff" the user wants the plugin
+    to own.
+  - Render: bind_pipeline once; per registered Sprite: push_uniforms
+    (position/size/tint) + draw(6).
+  - Game-facing API stays exactly as approved:
+        struct Paddle { engine::Sprite sprite; f32 speed; };
+    and game code mutates pong.left.sprite.x - nothing else changes.
+
+Backends:
+  - SDL3 GPU: near 1:1 passthrough (SDL_CreateGPUBuffer ->
+    create_buffer, SDL_CreateGPUGraphicsPipeline -> create_pipeline,
+    SDL_DrawGPUPrimitives -> draw).
+  - DX11: same contract implemented with ID3D11Buffer / shaders /
+    input layouts - proves the contract is backend-neutral.
+  - Software (future): same contract; each call rasterizes on CPU into
+    a pixel buffer; submit blits to the window. Identical output because
+    it replays the same passes/draws.
+
+Why A is recommended over B and C:
+  - It is exactly the surface SDL3 GPU / Vulkan / DX12 share, so the
+    SDL3 GPU backend is nearly free and the contract is proven industry
+    practice (Godot RenderingDevice, bgfx, Diligent Engine work this
+    way).
+  - Any feature is expressible with zero contract changes: sprites,
+    text, meshes, render targets, bloom/SSR, compute.
+  - Honest cost: the sprite plugin must now write real shader/pipeline/
+    buffer code - but that is precisely what the user asked for.
+
+OPTION B (not chosen): immediate resource-based - same resources and
+pipelines but no explicit command list; plugins call renderer.draw(...)
+directly; the backend records internally. Simpler to use/debug, but
+hides control: no multi-threaded recording, no explicit multi-pass
+structure, backend-internal reordering.
+
+OPTION C (not chosen): submission API (bgfx-style) - submit meshes +
+materials, renderer sorts/batches. Closest to an easy sprite plugin but
+it IS the "draw_quad" style the user rejected, and it caps what plugins
+can express (custom passes, compute).
+
+=====================================================================
+7. OPEN QUESTION 1 - THE UNIVERSAL SHADER LANGUAGE
+=====================================================================
+
+User proposed: "a universal shader language which compiles to required
+shader languages for the backends?" - i.e. write shaders once in one
+portable language, compile to whatever each backend needs.
+
+Research already done (read the cached SDL3 headers):
+  - SDL3 GPU takes PRECOMPILED shader bytecode, not source:
+    SDL_CreateGPUShader(code, format) where format is
+    SDL_GPU_SHADERFORMAT_*: SPIRV (Vulkan), DXBC, DXIL (D3D12),
+    MSL/METALLIB (Metal), PRIVATE (NDA platforms).
+  - The cached SDL3 (3.2.0) has NO SDL_ShaderCrossCompile; SDL_gpu.h
+    references SDL_shadercross as a SEPARATE project
+    (https://github.com/libsdl-org/SDL_shadercross).
+  - Note: in this SDL3 version the DXBC comment says "for D3D12" -
+    SDL3 GPU's backends are D3D12/Metal/Vulkan; there is no D3D11
+    backend in SDL3 GPU. Our DX11 backend must compile shaders itself.
+
+Candidate answers (NOT yet presented to the user):
+  1. HLSL source as the single source of truth; each backend compiles
+     or cross-compiles (D3D11: HLSL -> DXBC via D3DCompile; SDL3 GPU:
+     HLSL -> SPIR-V via SDL_shadercross or prebuilt; software backend:
+     its own path - see below). HLSL is pragmatic because D3D11/D3D12
+     consume HLSL-ish forms natively and SPIR-V is producible from HLSL.
+  2. A real universal shading language (e.g. slang by shader-slang) that
+     compiles to SPIR-V/DXIL/DXBC/MSL. More powerful but a big
+     dependency.
+  3. Precompiled bytecode in the contract + per-backend translation
+     layer (SPIRV-Cross etc.).
+
+Software-backend caveat: arbitrary shaders are the hard part for a CPU
+rasterizer. Pragmatic option: the software backend only needs to support
+the feature set actually used (flat-color unlit quads for now); parity
+is guaranteed at the FEATURE level, not for arbitrary shader programs.
+
+=====================================================================
+8. OPEN QUESTION 2 - CONCEPTS INSTEAD OF VIRTUAL INTERFACES
+=====================================================================
+
+User's concern: "this has virtual interfaces that bad. cant we just use
+concepts that enforce u to have those functions?"
+
+NOT yet answered. The agent's planned answer (reasoning):
+
+- Performance: virtual calls on the Renderer are COARSE (bind pipeline,
+  draw - maybe a few thousand per frame at most; one indirect jump
+  ~1-3ns). The hot loops (per-vertex, per-entity) live INSIDE backends
+  and inside feature-plugin batching - both of which can use templates
+  freely. Virtual dispatch on the contract is not the bottleneck.
+- Architecture: backends are separate modules chosen at the composition
+  root; feature plugins (sprite, text) are written once and must work
+  with ANY backend without knowing which. App stores resources
+  type-erased (std::any-style). Pure concept/static polymorphism would
+  force every plugin and App to be templated on the concrete backend
+  type - breaks separate compilation of plugins, runtime backend
+  selection (config/fallback), and fights the existing Plugin concept +
+  App design (the same pattern as their Plugin concept: concept for
+  enforcement, erased storage for use).
+- Recommended hybrid: the CONTRACT IS A CONCEPT (compile-time
+  enforcement: backends fail to compile if they miss a function; easy
+  to write mock/test renderers; good documentation) PLUS a thin
+  type-erased facade class (one vtable or a function-pointer table,
+  like SDL_Renderer's driver table) that App stores and plugins consume.
+  The facade's constructor accepts any type satisfying the concept -
+  that is where the concept check bites.
+- If the user truly wants zero virtuals later: swap the facade's vtable
+  for an explicit function-pointer table - the plugin-facing shape
+  stays identical. The contract text for plugins does not change.
+
+Also relevant: with C++26 modules, backends can be compiled separately
+and linked per build (static polymorphism breaks this for call sites).
+
+=====================================================================
+9. OPEN QUESTION 3 - MORE API SURFACE TO REVIEW
+=====================================================================
+
+User said: "i need to see more of the api / code surface and usage" -
+the sketch in section 6 was good but not enough. Pending deliverable:
+  - the full contract module (all types + descriptors + the concept +
+    facade),
+  - a complete sprite plugin implementation sketch (startup +
+    per-frame usage),
+  - a backend implementation sketch (SDL3 GPU),
+  - the composition-root/game code showing what the user's game code
+    looks like end to end,
+so the user can approve the API shape before implementation.
+
+=====================================================================
+10. DEFERRED / OUT OF SCOPE (do not drag back in)
+=====================================================================
+
+- ECS (flecs vs entt, flecs-as-scheduler instead of App): game-side,
+  deferred. User's explicit last word: "forget ecs thats game code
+  related management." Concerns raised earlier (flecs vs entt for
+  professional high-performance; would integrating flecs later require
+  game/plugin rewrites; using flecs as the scheduler/pipeline instead
+  of App) were all parked with this pivot. ECS is orthogonal to the
+  renderer contract; a game-side ECS plugin can be added later.
+- Texture loading (PNG etc.), camera/transform features, animation:
+  future plugins on top of the contract - prove the contract's
+  extensibility, do not shape it.
+- Post-processing, compute: future; the contract only needs to ALLOW
+  them (render targets from day 1).
+- The old command-list design: ABANDONED. docs/plans/2026-08-06-
+  renderer-contract-design.md documents it (status says implemented) -
+  supersede it once the new contract is decided. Do not revive the
+  std::any/FrameCommands machinery.
+
+=====================================================================
+11. WHAT A FRESH AGENT SHOULD DO
+=====================================================================
+
+VET:
+  1. Is Option A (rendering-device contract, section 6) the right
+     surface? Are there missing primitives or over-engineering?
+  2. Answer the shader-language question (section 7) - recommend one.
+  3. Answer the concepts-vs-virtual question (section 8) - recommend
+     and justify.
+  4. Check the contract against the constraints in section 5 (no
+     game-level renderer access, render targets from day 1,
+     backend-agnostic vertex layout, parity across backends, error-not-
+     crash).
+
+THEN CONTINUE:
+  5. Present the full API/code surface (section 9) to the user for
+     approval BEFORE implementing.
+  6. Implement the contract in engine/plugin/renderer/renderer.ixx.
+  7. Implement the SDL3 GPU backend (engine.renderer.sdl3) + the DX11
+     backend implementing the same contract (the user wants 2 backends
+     to prove the contract).
+  8. Rebuild the sprite plugin on the new contract, then the text
+     plugin, then Pong (or the more substantial game the user wants) -
+     game-facing API must stay data-only (section 4's approved shape).
+  9. Validate parity: same frame must render identically on both
+     backends; build clean with zero new warnings; run and confirm
+     visually with the user.

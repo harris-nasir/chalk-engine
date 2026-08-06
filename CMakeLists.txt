@@ -5,10 +5,10 @@ set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-include(cmake/CompilerWarnings.cmake)
-
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CPM_SOURCE_CACHE "${CMAKE_SOURCE_DIR}/external" CACHE PATH "CPM dependency source cache")
 
+include(cmake/CompilerWarnings.cmake)
 include(cmake/get_cpm.cmake)
 
 CPMFindPackage(
@@ -16,6 +16,13 @@ CPMFindPackage(
   GITHUB_REPOSITORY libsdl-org/SDL
   GIT_TAG release-3.2.0
   OPTIONS "SDL_SHARED ON" "SDL_STATIC OFF"
+  SYSTEM TRUE
+)
+
+CPMFindPackage(
+  NAME SDL3_image
+  GITHUB_REPOSITORY libsdl-org/SDL_image
+  GIT_TAG release-3.2.0
   SYSTEM TRUE
 )
 
@@ -33,7 +40,7 @@ target_sources(${PROJECT_NAME}
   FILES ${MODULE_SOURCES}
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3 d3d11)
+target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3 SDL3_image::SDL3_image d3d11)
 
 set_project_warnings(${PROJECT_NAME})
 
