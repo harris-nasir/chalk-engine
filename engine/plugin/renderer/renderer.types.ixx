@@ -175,7 +175,7 @@ export namespace engine
   struct RenderPassDescription
   {
     std::span<const ColorAttachment> color_attachments;
-    Option<DepthAttachment> depth_attachment; // empty = no depth buffer bound
+    Option<DepthAttachment> depth_attachment{}; // empty = no depth buffer bound
   };
 
   template <typename T>

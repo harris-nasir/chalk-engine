@@ -1,8 +1,8 @@
 module;
 
 #include <SDL3/SDL.h>
-#include <SDL3_image/SDL_image.h>
 
+#include <array>
 #include <cstring>
 #include <optional>
 #include <span>
@@ -11,7 +11,6 @@ module;
 export module engine.renderer.sdl3;
 
 import engine.core;
-import engine.platform;
 import engine.renderer.types;
 
 export namespace engine
@@ -27,23 +26,6 @@ export namespace engine
 
 namespace
 {
-  struct State
-  {
-    SDL_Renderer* renderer = nullptr;
-    SDL_Window* window     = nullptr;
-    i32 logical_width      = 1600;
-    i32 logical_height     = 900;
-    const bool* keys       = nullptr;
-  };
-
-  struct Texture
-  {
-    SDL_Texture* handle{};
-    SDL_FRect source{};
-    SDL_FRect destination{};
-    SDL_ScaleMode mode{};
-  };
-
   template <typename T>
   class HandleTable
   {
@@ -298,99 +280,27 @@ namespace engine
         Schedule::Startup,
         [](App& app) -> void
         {
-          State state{};
+          SDL_Window* window = app.require_resource<SDL_Window*>();
 
-          if (auto existing = app.resource<SDL_Window*>(); existing)
+#ifdef _DEBUG
+          constexpr bool debug_mode = true;
+#else
+          constexpr bool debug_mode = false;
+#endif
+
+          SDL_GPUDevice* device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, debug_mode, nullptr);
+          if (device == nullptr)
           {
-            state.window = *existing;
-          }
-          else
-          {
-            // Retrieve the platform's already-created native window as an
-            // SDL_Window. This does not create a new native window, only an
-            // SDL-side wrapper around one the platform already made.
-            auto& native_window{app.require_resource<NativeWindowHandle>()};
-            SDL_PropertiesID properties{SDL_CreateProperties()};
-
-            switch (native_window.kind)
-            {
-              case NativeWindowKind::Win32:
-              {
-                SDL_SetPointerProperty(properties, SDL_PROP_WINDOW_CREATE_WIN32_HWND_POINTER, native_window.handle);
-                break;
-              }
-
-              default:
-              {
-                app.report(Severity::Fatal, "Unsupported native window kind");
-              }
-            }
-
-            // TODO(hot-reload): this wrapper is only ever destroyed by process
-            // exit. Fine for a single-shot run, but will leak per reload once
-            // hot reload exists. Revisit once the threading model for reload
-            // is decided (affects whether it's safe for this plugin to destroy
-            // a window it wrapped itself).
-            state.window = SDL_CreateWindowWithProperties(properties);
-            SDL_DestroyProperties(properties);
-
-            if (state.window == nullptr)
-            {
-              app.report(Severity::Fatal, "Failed to retrieve native window as SDL window: {}", SDL_GetError());
-            }
+            app.report(Severity::Fatal, "SDL_CreateGPUDevice failed: {}", SDL_GetError());
           }
 
-          state.renderer = SDL_CreateRenderer(state.window, nullptr);
-          if (state.renderer == nullptr)
+          if (!SDL_ClaimWindowForGPUDevice(device, window))
           {
-            app.report(Severity::Fatal, "SDL_CreateRenderer failed: {}", SDL_GetError());
+            app.report(Severity::Fatal, "SDL_ClaimWindowForGPUDevice failed: {}", SDL_GetError());
           }
 
-          SDL_SetRenderLogicalPresentation(
-              state.renderer, state.logical_width, state.logical_height, SDL_LOGICAL_PRESENTATION_LETTERBOX
-          );
-
-          state.keys = SDL_GetKeyboardState(nullptr);
-
-          app.insert_resource<State>(state);
-          app.report(Severity::Info, "renderer created");
-        }
-    );
-
-    app.add_system(
-        Schedule::Startup,
-        [](App& app) -> void
-        {
-          auto& state = app.require_resource<State>();
-          Texture idle_texture{
-              .handle      = IMG_LoadTexture(state.renderer, "../assets/AXE1.png"),
-              .source      = {.x = 0, .y = 0, .w = 32, .h = 32},
-              .destination = {.x = 0, .y = 0, .w = 32, .h = 32},
-              .mode        = SDL_SCALEMODE_NEAREST,
-          }; // TODO: asset server?
-          if (!idle_texture.handle)
-          {
-            app.report(Severity::Fatal, "IMG_LoadTexture failed: {}", SDL_GetError());
-          }
-          SDL_SetTextureScaleMode(idle_texture.handle, idle_texture.mode);
-
-          app.insert_resource<Texture>(idle_texture);
-          app.report(Severity::Info, "texture loaded");
-        }
-    );
-
-    app.add_system(
-        Schedule::Update,
-        [](App& app)
-        {
-          auto& state        = app.require_resource<State>();
-          auto& idle_texture = app.require_resource<Texture>();
-          i32 floor          = state.logical_height;
-          f32 x{10};
-          f32 y{floor - idle_texture.source.h};
-
-          idle_texture.destination.x = x;
-          idle_texture.destination.y = y;
+          app.insert_resource<SDL3Renderer>(SDL3Renderer{app, device, window});
+          app.report(Severity::Info, "SDL3 GPU renderer ready");
         }
     );
 
@@ -398,15 +308,25 @@ namespace engine
         Schedule::Render,
         [](App& app) -> void
         {
-          auto& state{app.require_resource<State>()};
+          auto& renderer = app.require_resource<SDL3Renderer>();
 
-          SDL_SetRenderDrawColor(state.renderer, 17, 17, 17, 255);
-          SDL_RenderClear(state.renderer);
+          FrameHandle frame  = renderer.begin_frame();
+          TextureHandle target = renderer.swapchain_texture(frame);
+          if (target == TextureHandle::Invalid)
+          {
+            return; // window minimized or the frame failed to acquire; nothing to draw this frame
+          }
 
-          auto& idle_texture = app.require_resource<Texture>();
-          SDL_RenderTexture(state.renderer, idle_texture.handle, &idle_texture.source, &idle_texture.destination);
+          std::array<ColorAttachment, 1> color_attachments{ColorAttachment{
+              .target = target,
+              .load   = LoadOp::Clear,
+              .store  = StoreOp::Store,
+              .clear  = Color{.r = 17.0f / 255.0f, .g = 17.0f / 255.0f, .b = 17.0f / 255.0f, .a = 1.0f},
+          }};
 
-          SDL_RenderPresent(state.renderer); // swap buffers & present
+          PassHandle pass = renderer.begin_pass(frame, RenderPassDescription{.color_attachments = color_attachments});
+          renderer.end_pass(pass);
+          renderer.submit(frame);
         }
     );
 
@@ -414,19 +334,10 @@ namespace engine
         Schedule::Shutdown,
         [](App& app) -> void
         {
-          auto& state{app.require_resource<State>()};
-          SDL_DestroyRenderer(state.renderer);
-          app.report(Severity::Info, "renderer shut down");
-        }
-    );
-
-    app.add_system(
-        Schedule::Shutdown,
-        [](App& app) -> void
-        {
-          auto& idle_texture = app.require_resource<Texture>();
-          SDL_DestroyTexture(idle_texture.handle);
-          app.report(Severity::Info, "texture destroyed");
+          auto& renderer = app.require_resource<SDL3Renderer>();
+          SDL_ReleaseWindowFromGPUDevice(renderer.device(), renderer.window());
+          SDL_DestroyGPUDevice(renderer.device());
+          app.report(Severity::Info, "SDL3 GPU renderer shut down");
         }
     );
   }
