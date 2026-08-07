@@ -35,10 +35,7 @@ namespace engine
 
   void DefaultPlugin::build(App& app)
   {
-    // app.add_plugin<PlatformWin32Plugin>(description_);
     app.add_plugin<PlatformSDL3Plugin>(description_);
-
-    // app.add_plugin<RendererDX11Plugin>();
     app.add_plugin<RendererSDL3Plugin>();
   }
 
