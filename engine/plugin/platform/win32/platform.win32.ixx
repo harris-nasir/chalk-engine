@@ -50,8 +50,6 @@ namespace engine
 
   void PlatformWin32Plugin::build(App& app)
   {
-    auto& diagnostics = app.require_resource<Diagnostics>();
-
     WNDCLASSEX window_class{
         .cbSize        = sizeof(WNDCLASSEX),
         .lpfnWndProc   = &window_procedure,
@@ -63,7 +61,7 @@ namespace engine
 
     if (window_class_id == 0U)
     {
-      diagnostics.report(Severity::Fatal, "Failed to register window class: {}", GetLastError());
+      app.report(Severity::Fatal, "Failed to register window class: {}", GetLastError());
     }
 
     RECT rect{
@@ -91,7 +89,7 @@ namespace engine
 
     if (window == nullptr)
     {
-      diagnostics.report(Severity::Fatal, "Failed to create window: {}", GetLastError());
+      app.report(Severity::Fatal, "Failed to create window: {}", GetLastError());
     }
 
     app.insert_resource<Window>({
@@ -102,7 +100,7 @@ namespace engine
 
     app.insert_resource<NativeWindowHandle>({.kind = NativeWindowKind::Win32, .handle = window});
 
-    diagnostics.report(
+    app.report(
         Severity::Info, "opened window \"{}\" ({}x{})", description_.title, description_.width, description_.height
     );
 

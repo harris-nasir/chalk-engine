@@ -29,11 +29,9 @@ namespace engine
 
   void PlatformSDL3Plugin::build(App& app)
   {
-    auto& diagnostics = app.require_resource<Diagnostics>();
-
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
-      diagnostics.report(Severity::Fatal, "SDL_Init failed: {}", SDL_GetError());
+      app.report(Severity::Fatal, "SDL_Init failed: {}", SDL_GetError());
     }
 
     SDL_WindowFlags flags = 0;
@@ -67,19 +65,19 @@ namespace engine
     );
     if (window == nullptr)
     {
-      diagnostics.report(Severity::Fatal, "SDL_CreateWindow failed: {}", SDL_GetError());
+      app.report(Severity::Fatal, "SDL_CreateWindow failed: {}", SDL_GetError());
     }
 
     app.insert_resource<Window>({
-        .title          = description_.title,
-        .width          = description_.width,
-        .height         = description_.height,
-        .is_fullscreen  = description_.is_fullscreen,
-        .is_hidden      = description_.is_hidden,
-        .is_borderless  = description_.is_borderless,
-        .is_minimized   = description_.is_minimized,
-        .is_maximized   = description_.is_maximized,
-        .is_resizeable  = description_.is_resizeable,
+        .title         = description_.title,
+        .width         = description_.width,
+        .height        = description_.height,
+        .is_fullscreen = description_.is_fullscreen,
+        .is_hidden     = description_.is_hidden,
+        .is_borderless = description_.is_borderless,
+        .is_minimized  = description_.is_minimized,
+        .is_maximized  = description_.is_maximized,
+        .is_resizeable = description_.is_resizeable,
     });
 
     // lets an SDL3-based renderer reuse this window directly instead of wrapping NativeWindowHandle.
@@ -90,14 +88,14 @@ namespace engine
         = SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
     if (native_handle == nullptr)
     {
-      diagnostics.report(Severity::Fatal, "SDL_GetPointerProperty(SDL_PROP_WINDOW_WIN32_HWND_POINTER) failed");
+      app.report(Severity::Fatal, "SDL_GetPointerProperty(SDL_PROP_WINDOW_WIN32_HWND_POINTER) failed");
     }
     app.insert_resource<NativeWindowHandle>({.kind = NativeWindowKind::Win32, .handle = native_handle});
 #else
-    diagnostics.report(Severity::Fatal, "native window handle extraction not implemented for this platform");
+    app.report(Severity::Fatal, "native window handle extraction not implemented for this platform");
 #endif
 
-    diagnostics.report(
+    app.report(
         Severity::Info, "opened window \"{}\" ({}x{})", description_.title, description_.width, description_.height
     );
 
