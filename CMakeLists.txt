@@ -16,7 +16,7 @@ include(cmake/get_cpm.cmake)
 CPMFindPackage(
   NAME SDL3
   GITHUB_REPOSITORY libsdl-org/SDL
-  GIT_TAG release-3.2.0
+  GIT_TAG release-3.4.14
   OPTIONS "SDL_SHARED ON" "SDL_STATIC OFF"
   SYSTEM TRUE
 )
@@ -24,7 +24,7 @@ CPMFindPackage(
 CPMFindPackage(
   NAME SDL3_image
   GITHUB_REPOSITORY libsdl-org/SDL_image
-  GIT_TAG release-3.2.0
+  GIT_TAG release-3.4.4
   SYSTEM TRUE
 )
 
