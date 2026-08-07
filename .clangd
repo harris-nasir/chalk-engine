@@ -33,6 +33,9 @@ Diagnostics:
         readability-convert-member-functions-to-static,
         readability-identifier-length,
         readability-magic-numbers,
+        misc-use-internal-linkage,
+        performance-enum-size,
+        cppcoreguidelines-pro-type-member-init,
       ]
     CheckOptions:
       GlobalConstantCase: UPPER_CASE
