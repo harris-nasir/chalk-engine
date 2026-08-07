@@ -90,6 +90,7 @@ namespace engine
     SDL_GPUBufferCreateInfo info{
         .usage = to_sdl_buffer_usage(description.usage),
         .size  = static_cast<u32>(description.size),
+        .props = 0,
     };
     SDL_GPUBuffer* buffer = SDL_CreateGPUBuffer(device_, &info);
     if (buffer == nullptr)
@@ -123,6 +124,7 @@ namespace engine
         .layer_count_or_depth = 1,
         .num_levels           = 1,
         .sample_count         = SDL_GPU_SAMPLECOUNT_1,
+        .props                = 0,
     };
     SDL_GPUTexture* texture = SDL_CreateGPUTexture(device_, &info);
     if (texture == nullptr)
@@ -161,6 +163,7 @@ namespace engine
         .num_storage_textures = source.storage_texture_count,
         .num_storage_buffers  = source.storage_buffer_count,
         .num_uniform_buffers  = source.uniform_buffer_count,
+        .props                = 0,
     };
     SDL_GPUShader* shader = SDL_CreateGPUShader(device_, &info);
     if (shader == nullptr)
@@ -223,7 +226,12 @@ namespace engine
         .dst_alpha_blendfactor
         = description.blend.enabled ? SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA : SDL_GPU_BLENDFACTOR_ZERO,
         .alpha_blend_op = SDL_GPU_BLENDOP_ADD,
-        .enable_blend   = description.blend.enabled,
+        .color_write_mask
+        = SDL_GPU_COLORCOMPONENT_R | SDL_GPU_COLORCOMPONENT_G | SDL_GPU_COLORCOMPONENT_B | SDL_GPU_COLORCOMPONENT_A,
+        .enable_blend            = description.blend.enabled,
+        .enable_color_write_mask = false,
+        .padding1                = 0,
+        .padding2                = 0,
     };
 
     // Pipelines target the real swapchain format for now; a pipeline
@@ -249,15 +257,49 @@ namespace engine
         },
         .primitive_type   = to_sdl_primitive_type(description.topology),
         .rasterizer_state = SDL_GPURasterizerState{
-            .fill_mode  = SDL_GPU_FILLMODE_FILL,
-            .cull_mode  = SDL_GPU_CULLMODE_NONE,
-            .front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE,
+            .fill_mode                  = SDL_GPU_FILLMODE_FILL,
+            .cull_mode                  = SDL_GPU_CULLMODE_NONE,
+            .front_face                 = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE,
+            .depth_bias_constant_factor = 0.0F,
+            .depth_bias_clamp           = 0.0F,
+            .depth_bias_slope_factor    = 0.0F,
+            .enable_depth_bias          = false,
+            .enable_depth_clip          = false,
+            .padding1                   = 0,
+            .padding2                   = 0,
         },
-        .multisample_state   = SDL_GPUMultisampleState{.sample_count = SDL_GPU_SAMPLECOUNT_1},
+        .multisample_state = SDL_GPUMultisampleState{
+            .sample_count             = SDL_GPU_SAMPLECOUNT_1,
+            .sample_mask              = 0,
+            .enable_mask              = false,
+            .enable_alpha_to_coverage = false,
+            .padding2                 = 0,
+            .padding3                 = 0,
+        },
         .depth_stencil_state = SDL_GPUDepthStencilState{
-            .compare_op         = SDL_GPU_COMPAREOP_LESS,
-            .enable_depth_test  = description.depth.test_enabled,
-            .enable_depth_write = description.depth.write_enabled,
+            .compare_op = SDL_GPU_COMPAREOP_LESS,
+            .back_stencil_state
+            = SDL_GPUStencilOpState{
+                .fail_op       = SDL_GPU_STENCILOP_KEEP,
+                .pass_op       = SDL_GPU_STENCILOP_KEEP,
+                .depth_fail_op = SDL_GPU_STENCILOP_KEEP,
+                .compare_op    = SDL_GPU_COMPAREOP_NEVER,
+            },
+            .front_stencil_state
+            = SDL_GPUStencilOpState{
+                .fail_op       = SDL_GPU_STENCILOP_KEEP,
+                .pass_op       = SDL_GPU_STENCILOP_KEEP,
+                .depth_fail_op = SDL_GPU_STENCILOP_KEEP,
+                .compare_op    = SDL_GPU_COMPAREOP_NEVER,
+            },
+            .compare_mask        = 0,
+            .write_mask          = 0,
+            .enable_depth_test   = description.depth.test_enabled,
+            .enable_depth_write  = description.depth.write_enabled,
+            .enable_stencil_test = false,
+            .padding1            = 0,
+            .padding2            = 0,
+            .padding3            = 0,
         },
         .target_info = SDL_GPUGraphicsPipelineTargetInfo{
             .color_target_descriptions = &color_target,
@@ -266,7 +308,11 @@ namespace engine
             = description.depth.test_enabled ? to_sdl_pixel_format(PixelFormat::Depth24Stencil8)
                                               : SDL_GPU_TEXTUREFORMAT_INVALID,
             .has_depth_stencil_target = description.depth.test_enabled,
+            .padding1                 = 0,
+            .padding2                 = 0,
+            .padding3                 = 0,
         },
+        .props = 0,
     };
 
     SDL_GPUGraphicsPipeline* pipeline = SDL_CreateGPUGraphicsPipeline(device_, &info);
@@ -297,7 +343,7 @@ namespace engine
       return frame_swapchain_texture_;
     }
     auto* record = textures_.get(static_cast<u64>(handle));
-    return record ? record->handle : nullptr;
+    return (record != nullptr) ? record->handle : nullptr;
   }
 
   auto SDL3Renderer::begin_frame() -> FrameHandle
@@ -409,6 +455,7 @@ namespace engine
     SDL_GPUTransferBufferCreateInfo transfer_info{
         .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
         .size  = static_cast<u32>(bytes.size()),
+        .props = 0,
     };
     SDL_GPUTransferBuffer* transfer_buffer = SDL_CreateGPUTransferBuffer(device_, &transfer_info);
     if (transfer_buffer == nullptr)
@@ -460,6 +507,7 @@ namespace engine
     SDL_GPUTransferBufferCreateInfo transfer_info{
         .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
         .size  = static_cast<u32>(bytes.size()),
+        .props = 0,
     };
     SDL_GPUTransferBuffer* transfer_buffer = SDL_CreateGPUTransferBuffer(device_, &transfer_info);
     if (transfer_buffer == nullptr)
@@ -524,12 +572,21 @@ namespace engine
         return PassHandle::Invalid;
       }
       color_targets.push_back(SDL_GPUColorTargetInfo{
-          .texture     = texture,
-          .clear_color = SDL_FColor{
+          .texture               = texture,
+          .mip_level             = 0,
+          .layer_or_depth_plane  = 0,
+          .clear_color           = SDL_FColor{
               .r = attachment.clear.r, .g = attachment.clear.g, .b = attachment.clear.b, .a = attachment.clear.a
           },
-          .load_op  = to_sdl_load_op(attachment.load),
-          .store_op = to_sdl_store_op(attachment.store),
+          .load_op               = to_sdl_load_op(attachment.load),
+          .store_op              = to_sdl_store_op(attachment.store),
+          .resolve_texture       = nullptr,
+          .resolve_mip_level     = 0,
+          .resolve_layer         = 0,
+          .cycle                 = false,
+          .cycle_resolve_texture = false,
+          .padding1              = 0,
+          .padding2              = 0,
       });
     }
 
@@ -544,10 +601,16 @@ namespace engine
         return PassHandle::Invalid;
       }
       depth_target = SDL_GPUDepthStencilTargetInfo{
-          .texture     = texture,
-          .clear_depth = description.depth_attachment->clear_depth,
-          .load_op     = to_sdl_load_op(description.depth_attachment->load),
-          .store_op    = to_sdl_store_op(description.depth_attachment->store),
+          .texture          = texture,
+          .clear_depth      = description.depth_attachment->clear_depth,
+          .load_op          = to_sdl_load_op(description.depth_attachment->load),
+          .store_op         = to_sdl_store_op(description.depth_attachment->store),
+          .stencil_load_op  = SDL_GPU_LOADOP_LOAD,
+          .stencil_store_op = SDL_GPU_STOREOP_STORE,
+          .cycle            = false,
+          .clear_stencil    = 0,
+          .mip_level        = 0,
+          .layer            = 0,
       };
       depth_target_ptr = &depth_target;
     }
