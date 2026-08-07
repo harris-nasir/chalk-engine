@@ -52,8 +52,8 @@ export namespace engine
       if (!value_)
       {
         std::string_view path = location_.file_name();
-        auto pos               = path.find_last_of("/\\");
-        std::string_view file  = pos == std::string_view::npos ? path : path.substr(pos + 1);
+        auto pos              = path.find_last_of("/\\");
+        std::string_view file = pos == std::string_view::npos ? path : path.substr(pos + 1);
         std::cerr << "[engine] " << location_.function_name() << ": " << file << ":" << location_.line()
                   << ": dereferenced an empty Option\n";
       }
@@ -64,13 +64,18 @@ export namespace engine
     std::source_location location_;
   };
 
+} // namespace engine
+
+namespace
+{
+
   template <typename T>
   struct is_option : std::false_type
   {
   };
 
   template <typename T>
-  struct is_option<Option<T>> : std::true_type
+  struct is_option<engine::Option<T>> : std::true_type
   {
     using value_type = T;
   };
@@ -78,4 +83,4 @@ export namespace engine
   template <typename T>
   inline constexpr bool IS_OPTION_V = is_option<T>::value;
 
-} // namespace engine
+} // namespace

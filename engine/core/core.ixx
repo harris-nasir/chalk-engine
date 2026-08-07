@@ -27,6 +27,22 @@ namespace engine
   using Clock = std::chrono::steady_clock;
 } // namespace engine
 
+export namespace engine::detail
+{
+  // Implicitly built from a format literal at report() call sites.
+  struct ReportFormat
+  {
+    std::string_view fmt;
+    std::source_location loc;
+
+    template <typename T>
+    constexpr ReportFormat(const T& format, std::source_location location = std::source_location::current())
+        : fmt(format), loc(location)
+    {
+    }
+  };
+} // namespace engine::detail
+
 export namespace engine
 {
   class App;
@@ -47,28 +63,6 @@ export namespace engine
     Shutdown,
   };
 
-  [[nodiscard]] constexpr auto schedule_name(Schedule schedule) -> std::string_view
-  {
-    switch (schedule)
-    {
-      case Schedule::Startup:
-        return "Startup";
-      case Schedule::PreUpdate:
-        return "PreUpdate";
-      case Schedule::FixedUpdate:
-        return "FixedUpdate";
-      case Schedule::Update:
-        return "Update";
-      case Schedule::PostUpdate:
-        return "PostUpdate";
-      case Schedule::Render:
-        return "Render";
-      case Schedule::Shutdown:
-        return "Shutdown";
-    }
-    return "Unknown";
-  }
-
   using System = std::function<void(App&)>;
 
   enum class Severity : u8
@@ -78,124 +72,6 @@ export namespace engine
     Warn,
     Error,
     Fatal,
-  };
-
-  [[nodiscard]] constexpr auto severity_name(Severity severity) -> std::string_view
-  {
-    switch (severity)
-    {
-      case Severity::Debug:
-        return "DEBUG";
-      case Severity::Info:
-        return "INFO";
-      case Severity::Warn:
-        return "WARN";
-      case Severity::Error:
-        return "ERROR";
-      case Severity::Fatal:
-        return "FATAL";
-    }
-    return "UNKNOWN";
-  }
-
-  [[nodiscard]] constexpr auto severity_color(Severity severity) -> std::string_view
-  {
-    switch (severity)
-    {
-      case Severity::Debug:
-        return "\033[90m"; // white
-      case Severity::Info:
-        return "\033[37m"; // grey
-      case Severity::Warn:
-        return "\033[33m"; // yellow
-      case Severity::Error:
-        return "\033[31m"; // red
-      case Severity::Fatal:
-        return "\033[1;31m"; // bold red
-    }
-    return "\033[0m";
-  }
-
-  inline constexpr std::string_view SEVERITY_COLOR_RESET = "\033[0m";
-
-  struct DiagnosticMessage
-  {
-    Severity severity;
-    std::string text;
-    std::source_location location;
-  };
-
-  inline void print_diagnostic(const DiagnosticMessage& entry)
-  {
-    std::string_view path = entry.location.file_name();
-    auto file_start       = path.find_last_of("/\\");
-    std::string_view file = file_start == std::string_view::npos ? path : path.substr(file_start + 1);
-    auto tag_end          = file.find('.');
-    std::string_view tag  = tag_end == std::string_view::npos ? file : file.substr(0, tag_end);
-    std::cout << severity_color(entry.severity) << "[" << tag << "][" << severity_name(entry.severity) << "] " << file
-              << ":" << entry.location.line() << ": " << entry.text << SEVERITY_COLOR_RESET << '\n';
-  }
-
-  struct ReportFormat
-  {
-    std::string_view fmt;
-    std::source_location loc;
-
-    template <typename T>
-    constexpr ReportFormat(const T& format, std::source_location location = std::source_location::current())
-        : fmt(format), loc(location)
-    {
-    }
-  };
-
-  struct Diagnostics
-  {
-    Diagnostics()  = default;
-    ~Diagnostics() = default;
-
-    Diagnostics(const Diagnostics&)                        = delete;
-    auto operator=(const Diagnostics&) -> Diagnostics&     = delete;
-    Diagnostics(Diagnostics&&) noexcept                    = default;
-    auto operator=(Diagnostics&&) noexcept -> Diagnostics& = default;
-
-    template <typename... Args>
-    void report(Severity severity, ReportFormat fmt, const Args&... args)
-    {
-      push(severity, std::vformat(fmt.fmt, std::make_format_args(args...)), fmt.loc);
-    }
-
-    // Skips vformat, for text that's already formatted and may contain
-    // literal braces (vformat would misread them as placeholders).
-    void report_verbatim(Severity severity, std::string text, std::source_location location)
-    {
-      push(severity, std::move(text), location);
-    }
-
-    template <typename Fn>
-    void drain_unprinted(Fn&& function)
-    {
-      while (printed_ < messages_.size())
-      {
-        std::forward<Fn>(function)(messages_[printed_]);
-        ++printed_;
-      }
-    }
-
-  private:
-    // Fatal flushes and aborts immediately instead of waiting for the
-    // next scheduled drain.
-    void push(Severity severity, std::string text, std::source_location location)
-    {
-      messages_.push_back(DiagnosticMessage{.severity = severity, .text = std::move(text), .location = location});
-      if (severity == Severity::Fatal)
-      {
-        drain_unprinted(print_diagnostic);
-        std::abort();
-      }
-    }
-
-    std::vector<DiagnosticMessage> messages_;
-    std::size_t printed_ = 0;
   };
 
   struct Time
@@ -213,11 +89,7 @@ export namespace engine
   class App
   {
   public:
-    App() : last_tick_(Clock::now())
-    {
-      insert_resource<Diagnostics>({});
-      insert_resource<Time>({});
-    }
+    App();
     ~App() = default;
 
     App(const App&)                    = delete;
@@ -296,9 +168,9 @@ export namespace engine
     void exit() { is_running_ = false; }
 
     template <typename... Args>
-    void report(Severity severity, ReportFormat fmt, Args&&... args)
+    void report(Severity severity, detail::ReportFormat fmt, const Args&... args)
     {
-      require_resource<Diagnostics>().report(severity, fmt, std::forward<Args>(args)...);
+      report_text(severity, std::vformat(fmt.fmt, std::make_format_args(args...)), fmt.loc);
     }
 
   private:
@@ -320,6 +192,7 @@ export namespace engine
     }
 
     void report_missing_required_resource(std::string detail, std::source_location location);
+    void report_text(Severity severity, std::string text, std::source_location location);
 
     bool is_running_ = false;
     Clock::time_point last_tick_;
@@ -332,6 +205,119 @@ export namespace engine
 
 namespace engine
 {
+  namespace
+  {
+    struct DiagnosticMessage
+    {
+      Severity severity;
+      std::string text;
+      std::source_location location;
+    };
+
+    struct Diagnostics
+    {
+      Diagnostics()  = default;
+      ~Diagnostics() = default;
+
+      Diagnostics(const Diagnostics&)                        = delete;
+      auto operator=(const Diagnostics&) -> Diagnostics&     = delete;
+      Diagnostics(Diagnostics&&) noexcept                    = default;
+      auto operator=(Diagnostics&&) noexcept -> Diagnostics& = default;
+
+      template <typename... Args>
+      void report(Severity severity, detail::ReportFormat fmt, const Args&... args)
+      {
+        push(severity, std::vformat(fmt.fmt, std::make_format_args(args...)), fmt.loc);
+      }
+
+      // Skips vformat, for text that's already formatted and may contain
+      // literal braces (vformat would misread them as placeholders).
+      void report_verbatim(Severity severity, std::string text, std::source_location location)
+      {
+        push(severity, std::move(text), location);
+      }
+
+      template <typename Fn>
+      void drain_unprinted(Fn&& function)
+      {
+        while (printed_ < messages_.size())
+        {
+          std::forward<Fn>(function)(messages_[printed_]);
+          ++printed_;
+        }
+      }
+
+    private:
+      // Fatal flushes and aborts immediately instead of waiting for the
+      // next scheduled drain.
+      void push(Severity severity, std::string text, std::source_location location);
+
+      std::vector<DiagnosticMessage> messages_;
+      std::size_t printed_ = 0;
+    };
+
+    [[nodiscard]] constexpr auto severity_name(Severity severity) -> std::string_view
+    {
+      switch (severity)
+      {
+        case Severity::Debug:
+          return "DEBUG";
+        case Severity::Info:
+          return "INFO";
+        case Severity::Warn:
+          return "WARN";
+        case Severity::Error:
+          return "ERROR";
+        case Severity::Fatal:
+          return "FATAL";
+      }
+      return "UNKNOWN";
+    }
+
+    [[nodiscard]] constexpr auto severity_color(Severity severity) -> std::string_view
+    {
+      switch (severity)
+      {
+        case Severity::Debug:
+          return "\033[90m"; // white
+        case Severity::Info:
+          return "\033[37m"; // grey
+        case Severity::Warn:
+          return "\033[33m"; // yellow
+        case Severity::Error:
+          return "\033[31m"; // red
+        case Severity::Fatal:
+          return "\033[1;31m"; // bold red
+      }
+      return "\033[0m";
+    }
+
+    inline constexpr std::string_view SEVERITY_COLOR_RESET = "\033[0m";
+
+    inline void print_diagnostic(const DiagnosticMessage& entry)
+    {
+      std::string_view path = entry.location.file_name();
+      auto file_start       = path.find_last_of("/\\");
+      std::string_view file = file_start == std::string_view::npos ? path : path.substr(file_start + 1);
+      auto tag_end          = file.find('.');
+      std::string_view tag  = tag_end == std::string_view::npos ? file : file.substr(0, tag_end);
+      std::cout << severity_color(entry.severity) << "[" << tag << "][" << severity_name(entry.severity) << "] " << file
+                << ":" << entry.location.line() << ": " << entry.text << SEVERITY_COLOR_RESET << '\n';
+    }
+
+  } // namespace
+
+  App::App() : last_tick_(Clock::now())
+  {
+    insert_resource<Diagnostics>({});
+    insert_resource<Time>({});
+  }
+
+  void App::report_text(Severity severity, std::string text, std::source_location location)
+  {
+    require_resource<Diagnostics>().report_verbatim(severity, std::move(text), location);
+  }
+
   void App::report_missing_required_resource(std::string detail, std::source_location location)
   {
     if (auto diagnostics = resource<Diagnostics>(location); diagnostics)
@@ -342,6 +328,16 @@ namespace engine
 
     print_diagnostic(DiagnosticMessage{.severity = Severity::Fatal, .text = std::move(detail), .location = location});
     std::abort();
+  }
+
+  void Diagnostics::push(Severity severity, std::string text, std::source_location location)
+  {
+    messages_.push_back(DiagnosticMessage{.severity = severity, .text = std::move(text), .location = location});
+    if (severity == Severity::Fatal)
+    {
+      drain_unprinted(print_diagnostic);
+      std::abort();
+    }
   }
 
   void App::execute()
