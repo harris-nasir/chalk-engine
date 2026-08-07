@@ -310,22 +310,26 @@ namespace engine
         {
           auto& renderer = app.require_resource<SDL3Renderer>();
 
-          FrameHandle frame  = renderer.begin_frame();
+          FrameHandle frame    = renderer.begin_frame();
           TextureHandle target = renderer.swapchain_texture(frame);
-          if (target == TextureHandle::Invalid)
+          if (target != TextureHandle::Invalid)
           {
-            return; // window minimized or the frame failed to acquire; nothing to draw this frame
+            std::array<ColorAttachment, 1> color_attachments{ColorAttachment{
+                .target = target,
+                .load   = LoadOp::Clear,
+                .store  = StoreOp::Store,
+                .clear  = Color{.r = 17.0f / 255.0f, .g = 17.0f / 255.0f, .b = 17.0f / 255.0f, .a = 1.0f},
+            }};
+
+            PassHandle pass = renderer.begin_pass(frame, RenderPassDescription{.color_attachments = color_attachments});
+            renderer.end_pass(pass);
           }
-
-          std::array<ColorAttachment, 1> color_attachments{ColorAttachment{
-              .target = target,
-              .load   = LoadOp::Clear,
-              .store  = StoreOp::Store,
-              .clear  = Color{.r = 17.0f / 255.0f, .g = 17.0f / 255.0f, .b = 17.0f / 255.0f, .a = 1.0f},
-          }};
-
-          PassHandle pass = renderer.begin_pass(frame, RenderPassDescription{.color_attachments = color_attachments});
-          renderer.end_pass(pass);
+          // Submit unconditionally: a successful begin_frame() (even with a
+          // null/invalid swapchain texture, e.g. minimized window) still owns
+          // a live SDL_GPUCommandBuffer that must be submitted, never
+          // cancelled, to avoid leaking it. submit()'s own guard makes this a
+          // harmless no-op (reported as Severity::Error) if begin_frame()
+          // itself failed.
           renderer.submit(frame);
         }
     );
