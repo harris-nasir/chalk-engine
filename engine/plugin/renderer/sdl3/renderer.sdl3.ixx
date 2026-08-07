@@ -90,19 +90,19 @@ namespace engine
         {
           auto& renderer = app.require_resource<SDL3Renderer>();
 
-          FrameHandle frame    = renderer.begin_frame();
+          FrameID frame        = renderer.begin_frame();
           TextureHandle target = renderer.swapchain_texture(frame);
 
           if (target != TextureHandle::Invalid)
           {
             std::array<ColorAttachment, 1> color_attachments{ColorAttachment{
                 .target = target,
-                .load   = LoadOp::Clear,
-                .store  = StoreOp::Store,
+                .load   = LoadOp::Clear,  // clear the data already in the texture
+                .store  = StoreOp::Store, // store the data i.e overwrite everything in the texture
                 .clear  = Color{.r = 17.0F / 255.0F, .g = 17.0F / 255.0F, .b = 17.0F / 255.0F, .a = 1.0F},
             }};
 
-            PassHandle pass = renderer.begin_pass(frame, RenderPassDescription{.color_attachments = color_attachments});
+            PassID pass = renderer.begin_pass(frame, RenderPassDescription{.color_attachments = color_attachments});
             renderer.end_pass(pass);
           }
 

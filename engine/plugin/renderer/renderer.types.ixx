@@ -31,15 +31,15 @@ export namespace engine
   {
     Invalid = 0
   };
-  enum class FrameHandle : u64
+  enum class FrameID : u64
   {
     Invalid = 0
   };
-  enum class PassHandle : u64
+  enum class PassID : u64
   {
     Invalid = 0
   };
-  enum class CopyPassHandle : u64
+  enum class CopyPassID : u64
   {
     Invalid = 0
   };
@@ -147,13 +147,13 @@ export namespace engine
   {
     Clear,
     Load,
-    DontCare,
+    Ignore,
   };
 
   enum class StoreOp : u8
   {
     Store,
-    DontCare,
+    Ignore,
   };
 
   struct ColorAttachment
@@ -182,8 +182,8 @@ export namespace engine
   concept RendererBackend = requires(
       T& r, BufferDescription buffer_description, TextureDescription texture_description, ShaderSource shader_source,
       PipelineDescription pipeline_description, RenderPassDescription pass_description, BufferHandle buffer,
-      TextureHandle texture, ShaderHandle shader, PipelineHandle pipeline, FrameHandle frame, PassHandle pass,
-      CopyPassHandle copy_pass, ShaderStage stage, u32 count, std::span<const u8> bytes
+      TextureHandle texture, ShaderHandle shader, PipelineHandle pipeline, FrameID frame, PassID pass,
+      CopyPassID copy_pass, ShaderStage stage, u32 count, std::span<const u8> bytes
   ) {
     { r.create_buffer(buffer_description) } -> std::same_as<BufferHandle>;
     { r.destroy_buffer(buffer) } -> std::same_as<void>;
@@ -194,14 +194,14 @@ export namespace engine
     { r.create_pipeline(pipeline_description) } -> std::same_as<PipelineHandle>;
     { r.destroy_pipeline(pipeline) } -> std::same_as<void>;
 
-    { r.begin_frame() } -> std::same_as<FrameHandle>;
+    { r.begin_frame() } -> std::same_as<FrameID>;
     { r.swapchain_texture(frame) } -> std::same_as<TextureHandle>;
-    { r.begin_copy_pass(frame) } -> std::same_as<CopyPassHandle>;
+    { r.begin_copy_pass(frame) } -> std::same_as<CopyPassID>;
     { r.upload_buffer(copy_pass, buffer, bytes) } -> std::same_as<void>;
     { r.upload_texture(copy_pass, texture, bytes, count) } -> std::same_as<void>;
     { r.end_copy_pass(copy_pass) } -> std::same_as<void>;
 
-    { r.begin_pass(frame, pass_description) } -> std::same_as<PassHandle>;
+    { r.begin_pass(frame, pass_description) } -> std::same_as<PassID>;
     { r.bind_pipeline(pass, pipeline) } -> std::same_as<void>;
     { r.bind_vertex_buffer(pass, buffer, count) } -> std::same_as<void>;
     { r.bind_index_buffer(pass, buffer) } -> std::same_as<void>;

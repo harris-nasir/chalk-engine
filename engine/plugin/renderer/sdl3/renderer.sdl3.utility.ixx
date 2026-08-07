@@ -163,7 +163,7 @@ namespace engine
         return SDL_GPU_LOADOP_CLEAR;
       case engine::LoadOp::Load:
         return SDL_GPU_LOADOP_LOAD;
-      case engine::LoadOp::DontCare:
+      case engine::LoadOp::Ignore:
         return SDL_GPU_LOADOP_DONT_CARE;
     }
     return SDL_GPU_LOADOP_DONT_CARE;
@@ -175,7 +175,7 @@ namespace engine
     {
       case engine::StoreOp::Store:
         return SDL_GPU_STOREOP_STORE;
-      case engine::StoreOp::DontCare:
+      case engine::StoreOp::Ignore:
         return SDL_GPU_STOREOP_DONT_CARE;
     }
     return SDL_GPU_STOREOP_DONT_CARE;
