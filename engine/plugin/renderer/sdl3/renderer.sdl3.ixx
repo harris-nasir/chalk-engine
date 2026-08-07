@@ -7,6 +7,7 @@ module;
 export module engine.renderer.sdl3;
 
 import engine.core;
+import engine.platform;
 import engine.renderer.types;
 
 export import :renderer;
@@ -31,8 +32,35 @@ namespace engine
         Schedule::Startup,
         [](App& app) -> void
         {
-          SDL_Window* window = app.require_resource<SDL_Window*>();
-      // TODO: add fallback if only native window is provided
+          SDL_Window* window = nullptr;
+          if (app.has_resource<SDL_Window*>())
+          {
+            window = app.require_resource<SDL_Window*>();
+          }
+          else
+          {
+            auto& native = app.require_resource<NativeWindowHandle>();
+
+            if (native.kind != NativeWindowKind::Win32)
+            {
+              app.report(Severity::Fatal, "SDL3 renderer: cannot wrap a non-Win32 native window");
+            }
+
+            SDL_PropertiesID props = SDL_CreateProperties();
+            if (props == 0)
+            {
+              app.report(Severity::Fatal, "SDL_CreateProperties failed: {}", SDL_GetError());
+            }
+
+            SDL_SetPointerProperty(props, SDL_PROP_WINDOW_CREATE_WIN32_HWND_POINTER, native.handle);
+            window = SDL_CreateWindowWithProperties(props);
+            SDL_DestroyProperties(props);
+
+            if (window == nullptr)
+            {
+              app.report(Severity::Fatal, "SDL_CreateWindowWithProperties failed: {}", SDL_GetError());
+            }
+          }
 
 #ifdef _DEBUG
           constexpr bool debug_mode = true;
@@ -49,16 +77,6 @@ namespace engine
           if (!SDL_ClaimWindowForGPUDevice(device, window))
           {
             app.report(Severity::Fatal, "SDL_ClaimWindowForGPUDevice failed: {}", SDL_GetError());
-          }
-
-          // Cap the backend to one frame in flight (the default is 2). SDL
-          // 3.4.x signals a dedicated semaphore per swapchain image, so the
-          // present-reuse race is gone; this cap just bounds queue depth and
-          // latency for the uncapped engine loop. SDL's own GPU renderer uses
-          // the same setting.
-          if (!SDL_SetGPUAllowedFramesInFlight(device, 1))
-          {
-            app.report(Severity::Fatal, "SDL_SetGPUAllowedFramesInFlight failed: {}", SDL_GetError());
           }
 
           app.insert_resource<SDL3Renderer>(SDL3Renderer{app, device, window});
@@ -81,7 +99,7 @@ namespace engine
                 .target = target,
                 .load   = LoadOp::Clear,
                 .store  = StoreOp::Store,
-                .clear  = Color{.r = 17.0f / 255.0f, .g = 17.0f / 255.0f, .b = 17.0f / 255.0f, .a = 1.0f},
+                .clear  = Color{.r = 17.0F / 255.0F, .g = 17.0F / 255.0F, .b = 17.0F / 255.0F, .a = 1.0F},
             }};
 
             PassHandle pass = renderer.begin_pass(frame, RenderPassDescription{.color_attachments = color_attachments});
