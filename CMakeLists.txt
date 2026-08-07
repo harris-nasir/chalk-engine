@@ -4,6 +4,8 @@ project(chalk VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CHALK_RENDERER "SDL3" CACHE STRING "Renderer backend selected at compile time")
+set_property(CACHE CHALK_RENDERER PROPERTY STRINGS SDL3 DX11)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CPM_SOURCE_CACHE "${CMAKE_SOURCE_DIR}/external" CACHE PATH "CPM dependency source cache")
@@ -43,6 +45,14 @@ target_sources(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3 SDL3_image::SDL3_image d3d11)
 
 set_project_warnings(${PROJECT_NAME})
+
+if(CHALK_RENDERER STREQUAL "SDL3")
+  target_compile_definitions(${PROJECT_NAME} PRIVATE CHALK_RENDERER_SDL3)
+elseif(CHALK_RENDERER STREQUAL "DX11")
+  target_compile_definitions(${PROJECT_NAME} PRIVATE CHALK_RENDERER_DX11)
+else()
+  message(FATAL_ERROR "Unknown CHALK_RENDERER value: ${CHALK_RENDERER} (expected SDL3 or DX11)")
+endif()
 
 if(MSVC)
   target_compile_options(${PROJECT_NAME} PRIVATE /EHs-c-)
