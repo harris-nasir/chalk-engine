@@ -2,59 +2,13 @@ module;
 
 #include <SDL3/SDL.h>
 
-#include <optional>
-#include <utility>
-#include <vector>
-
 export module engine.renderer.sdl3:utility;
 
 import engine.core;
 import engine.renderer.types;
 
-// Non-exported (module-linkage) helpers for the SDL3 backend, kept out of
-// the exported module surface. They can't be TU-local in the unnamed
-// namespace: HandleTable/TextureRecord are the declared types of the
-// exported SDL3Renderer's private members (TU-local member types trip a
-// TU-local-entity-exposure diagnostic), and the to_sdl converters are used
-// from the :renderer partition, which cannot reach this unit's unnamed
-// namespace. A non-exported entity in the module's own namespace is visible
-// to the module but never exported, which is all we need.
 namespace engine
 {
-  template <typename T>
-  class HandleTable
-  {
-  public:
-    auto insert(T value) -> u64
-    {
-      slots_.push_back(std::move(value));
-      return slots_.size(); // 1-based; 0 is reserved for Invalid, and indices are never reused
-    }
-
-    [[nodiscard]] auto get(u64 handle) -> T*
-    {
-      if (handle == 0 || handle > slots_.size())
-      {
-        return nullptr;
-      }
-      auto& slot = slots_[handle - 1];
-      return slot ? &*slot : nullptr;
-    }
-
-    auto destroy(u64 handle) -> bool
-    {
-      if (get(handle) == nullptr)
-      {
-        return false;
-      }
-      slots_[handle - 1].reset();
-      return true;
-    }
-
-  private:
-    std::vector<std::optional<T>> slots_;
-  };
-
   struct TextureRecord
   {
     SDL_GPUTexture* handle;
@@ -62,10 +16,7 @@ namespace engine
     u32 height;
     engine::PixelFormat format;
   };
-} // namespace engine
 
-namespace engine
-{
   // Never a real HandleTable index (those start at 1 and grow one at a
   // time), so it can never collide with a created texture's handle.
   constexpr u64 SWAPCHAIN_TEXTURE_HANDLE = ~u64{0};
@@ -119,15 +70,15 @@ namespace engine
   {
     SDL_GPUTextureUsageFlags flags{};
     auto raw = static_cast<u32>(usage);
-    if (raw & static_cast<u32>(engine::TextureUsage::Sampled))
+    if ((raw & static_cast<u32>(engine::TextureUsage::Sampled)) != 0U)
     {
       flags |= SDL_GPU_TEXTUREUSAGE_SAMPLER;
     }
-    if (raw & static_cast<u32>(engine::TextureUsage::ColorTarget))
+    if ((raw & static_cast<u32>(engine::TextureUsage::ColorTarget)) != 0U)
     {
       flags |= SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
     }
-    if (raw & static_cast<u32>(engine::TextureUsage::DepthTarget))
+    if ((raw & static_cast<u32>(engine::TextureUsage::DepthTarget)) != 0U)
     {
       flags |= SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
     }
