@@ -309,13 +309,11 @@ namespace engine
             app.report(Severity::Fatal, "SDL_ClaimWindowForGPUDevice failed: {}", SDL_GetError());
           }
 
-          // Cap the backend to one frame in flight (the default is 2). With
-          // more than one slot, an uncapped loop can re-signal a swapchain
-          // present semaphore while the swapchain still references it, which
-          // trips VUID-vkQueueSubmit-pSignalSemaphores-00067. SDL's own GPU
-          // renderer uses the same setting. The actual guarantee that the
-          // previous present has completed comes from the device-idle wait in
-          // begin_frame(); this only keeps SDL's internal bookkeeping tight.
+          // Cap the backend to one frame in flight (the default is 2). SDL
+          // 3.4.x signals a dedicated semaphore per swapchain image, so the
+          // present-reuse race is gone; this cap just bounds queue depth and
+          // latency for the uncapped engine loop. SDL's own GPU renderer uses
+          // the same setting.
           if (!SDL_SetGPUAllowedFramesInFlight(device, 1))
           {
             app.report(Severity::Fatal, "SDL_SetGPUAllowedFramesInFlight failed: {}", SDL_GetError());
@@ -586,20 +584,6 @@ namespace engine
 
   auto SDL3Renderer::begin_frame() -> FrameHandle
   {
-    // SDL3 3.2.0's Vulkan backend indexes swapchain semaphores by frame
-    // slot, not by presented image. The engine loop is uncapped, so a new
-    // submit can re-signal a present semaphore while the swapchain still
-    // references it for a presentation whose image has not been re-acquired,
-    // tripping VUID-vkQueueSubmit-pSignalSemaphores-00067. SDL's fence APIs
-    // only cover the submit, not the present, so the only guaranteed way to
-    // know the previous present completed is to drain the device. This
-    // serializes frames; revisit when the renderer actually does work worth
-    // pipelining (or when SDL's backend fixes its semaphore indexing).
-    if (!SDL_WaitForGPUIdle(device_))
-    {
-      app_.report(Severity::Error, "SDL_WaitForGPUIdle failed: {}", SDL_GetError());
-    }
-
     SDL_GPUCommandBuffer* command_buffer = SDL_AcquireGPUCommandBuffer(device_);
     if (command_buffer == nullptr)
     {
@@ -607,10 +591,10 @@ namespace engine
       return FrameHandle::Invalid;
     }
 
-    // WaitAndAcquire, not Acquire: with the device idle this never blocks,
-    // but it is the documented call for rendering to a window, and it
-    // degrades gracefully (swapchain texture may be null) if a present is
-    // ever in flight.
+    // WaitAndAcquire, not Acquire: it is the documented call for rendering to
+    // a window, it blocks until the previous frame (if any) completes given
+    // the one-frame-in-flight cap, and it degrades gracefully (swapchain
+    // texture may be null) if a present is ever still in flight.
     SDL_GPUTexture* swapchain = nullptr;
     if (!SDL_WaitAndAcquireGPUSwapchainTexture(command_buffer, window_, &swapchain, nullptr, nullptr))
     {
