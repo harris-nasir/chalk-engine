@@ -4,6 +4,7 @@ module;
 
 #include <array>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <span>
 #include <vector>
@@ -24,7 +25,14 @@ export namespace engine
 
 } // namespace engine
 
-namespace
+// Named (not exported) namespace, not the unnamed namespace: these are the
+// declared types of SDL3Renderer's private members, and SDL3Renderer is
+// exported. Unnamed-namespace (TU-local) types used as members of an
+// exported class trigger a TU-local-entity-exposure diagnostic; a named
+// namespace that the module never exports gives them external-but-
+// unexported linkage instead, which is just as inaccessible from outside
+// this module without the warning.
+namespace sdl3_detail
 {
   template <typename T>
   class HandleTable
@@ -67,7 +75,10 @@ namespace
     u32 height;
     engine::PixelFormat format;
   };
+} // namespace sdl3_detail
 
+namespace
+{
   // Never a real HandleTable index (those start at 1 and grow one at a
   // time), so it can never collide with a created texture's handle.
   constexpr u64 SWAPCHAIN_TEXTURE_HANDLE = ~u64{0};
@@ -252,10 +263,10 @@ export namespace engine
     SDL_GPUDevice* device_;
     SDL_Window* window_;
 
-    HandleTable<SDL_GPUBuffer*> buffers_;
-    HandleTable<TextureRecord> textures_;
-    HandleTable<SDL_GPUShader*> shaders_;
-    HandleTable<SDL_GPUGraphicsPipeline*> pipelines_;
+    sdl3_detail::HandleTable<SDL_GPUBuffer*> buffers_;
+    sdl3_detail::HandleTable<sdl3_detail::TextureRecord> textures_;
+    sdl3_detail::HandleTable<SDL_GPUShader*> shaders_;
+    sdl3_detail::HandleTable<SDL_GPUGraphicsPipeline*> pipelines_;
 
     u64 frame_token_                            = 0;
     SDL_GPUCommandBuffer* frame_command_buffer_ = nullptr;
@@ -348,6 +359,11 @@ namespace engine
 
   auto SDL3Renderer::create_buffer(BufferDescription description) -> BufferHandle
   {
+    if (description.size > std::numeric_limits<u32>::max())
+    {
+      app_.report(Severity::Error, "create_buffer: size {} exceeds SDL3 GPU's u32 buffer size limit", description.size);
+      return BufferHandle::Invalid;
+    }
     SDL_GPUBufferCreateInfo info{
         .usage = to_sdl_buffer_usage(description.usage),
         .size  = static_cast<u32>(description.size),
@@ -391,7 +407,7 @@ namespace engine
       app_.report(Severity::Error, "SDL_CreateGPUTexture failed: {}", SDL_GetError());
       return TextureHandle::Invalid;
     }
-    return static_cast<TextureHandle>(textures_.insert(TextureRecord{
+    return static_cast<TextureHandle>(textures_.insert(sdl3_detail::TextureRecord{
         .handle = texture, .width = description.width, .height = description.height, .format = description.format
     }));
   }
@@ -483,12 +499,14 @@ namespace engine
         .enable_blend   = description.blend.enabled,
     };
 
-    // Pipelines target the swapchain's RGBA8 format for now; a pipeline
+    // Pipelines target the real swapchain format for now; a pipeline
     // targeting an offscreen texture of a different format is future work
     // (PipelineDescription doesn't carry a target format yet, no caller
-    // needs one until a render-to-texture feature plugin exists).
+    // needs one until a render-to-texture feature plugin exists). Query it
+    // rather than hardcoding: SDL3's Vulkan backend returns B8G8R8A8_UNORM
+    // for SDR swapchains, not R8G8B8A8_UNORM.
     SDL_GPUColorTargetDescription color_target{
-        .format      = to_sdl_pixel_format(PixelFormat::RGBA8),
+        .format      = SDL_GetGPUSwapchainTextureFormat(device_, window_),
         .blend_state = blend_state,
     };
 
