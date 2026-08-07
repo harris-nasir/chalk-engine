@@ -1,10 +1,7 @@
 module;
 
 #include <concepts>
-#include <optional>
 #include <span>
-#include <utility>
-#include <vector>
 
 export module engine.renderer.types;
 
@@ -45,40 +42,6 @@ export namespace engine
   enum class CopyPassHandle : u64
   {
     Invalid = 0
-  };
-
-  template <typename T>
-  class HandleTable
-  {
-  public:
-    auto insert(T value) -> u64
-    {
-      slots_.push_back(std::move(value));
-      return slots_.size(); // 1-based; 0 is reserved for Invalid, and indices are never reused
-    }
-
-    [[nodiscard]] auto get(u64 handle) -> T*
-    {
-      if (handle == 0 || handle > slots_.size())
-      {
-        return nullptr;
-      }
-      auto& slot = slots_[handle - 1];
-      return slot ? &*slot : nullptr;
-    }
-
-    auto destroy(u64 handle) -> bool
-    {
-      if (get(handle) == nullptr)
-      {
-        return false;
-      }
-      slots_[handle - 1].reset();
-      return true;
-    }
-
-  private:
-    std::vector<std::optional<T>> slots_;
   };
 
   enum class BufferUsage : u8
