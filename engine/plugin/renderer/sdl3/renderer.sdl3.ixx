@@ -25,14 +25,12 @@ export namespace engine
 
 } // namespace engine
 
-// Named (not exported) namespace, not the unnamed namespace: these are the
-// declared types of SDL3Renderer's private members, and SDL3Renderer is
-// exported. Unnamed-namespace (TU-local) types used as members of an
-// exported class trigger a TU-local-entity-exposure diagnostic; a named
-// namespace that the module never exports gives them external-but-
-// unexported linkage instead, which is just as inaccessible from outside
-// this module without the warning.
-namespace sdl3_detail
+// Not exported: these are the declared types of SDL3Renderer's private
+// members, and SDL3Renderer is exported. They can't live in the unnamed
+// namespace - TU-local types used as members of an exported class trip a
+// TU-local-entity-exposure diagnostic - but a non-exported entity in the
+// module's own namespace is invisible to importers, which is all we need.
+namespace engine
 {
   template <typename T>
   class HandleTable
@@ -75,7 +73,7 @@ namespace sdl3_detail
     u32 height;
     engine::PixelFormat format;
   };
-} // namespace sdl3_detail
+} // namespace engine
 
 namespace
 {
@@ -263,10 +261,10 @@ export namespace engine
     SDL_GPUDevice* device_;
     SDL_Window* window_;
 
-    sdl3_detail::HandleTable<SDL_GPUBuffer*> buffers_;
-    sdl3_detail::HandleTable<sdl3_detail::TextureRecord> textures_;
-    sdl3_detail::HandleTable<SDL_GPUShader*> shaders_;
-    sdl3_detail::HandleTable<SDL_GPUGraphicsPipeline*> pipelines_;
+    HandleTable<SDL_GPUBuffer*> buffers_;
+    HandleTable<TextureRecord> textures_;
+    HandleTable<SDL_GPUShader*> shaders_;
+    HandleTable<SDL_GPUGraphicsPipeline*> pipelines_;
 
     u64 frame_token_                            = 0;
     SDL_GPUCommandBuffer* frame_command_buffer_ = nullptr;
@@ -275,7 +273,7 @@ export namespace engine
     u64 copy_pass_token_        = 0;
     SDL_GPUCopyPass* copy_pass_ = nullptr;
 
-    u64 pass_token_                = 0;
+    u64 pass_token_                 = 0;
     SDL_GPURenderPass* render_pass_ = nullptr;
   };
 
@@ -292,6 +290,7 @@ namespace engine
         [](App& app) -> void
         {
           SDL_Window* window = app.require_resource<SDL_Window*>();
+      // TODO: add fallback if only native window is provided
 
 #ifdef _DEBUG
           constexpr bool debug_mode = true;
@@ -310,6 +309,18 @@ namespace engine
             app.report(Severity::Fatal, "SDL_ClaimWindowForGPUDevice failed: {}", SDL_GetError());
           }
 
+          // Cap the backend to one frame in flight (the default is 2). With
+          // more than one slot, an uncapped loop can re-signal a swapchain
+          // present semaphore while the swapchain still references it, which
+          // trips VUID-vkQueueSubmit-pSignalSemaphores-00067. SDL's own GPU
+          // renderer uses the same setting. The actual guarantee that the
+          // previous present has completed comes from the device-idle wait in
+          // begin_frame(); this only keeps SDL's internal bookkeeping tight.
+          if (!SDL_SetGPUAllowedFramesInFlight(device, 1))
+          {
+            app.report(Severity::Fatal, "SDL_SetGPUAllowedFramesInFlight failed: {}", SDL_GetError());
+          }
+
           app.insert_resource<SDL3Renderer>(SDL3Renderer{app, device, window});
           app.report(Severity::Info, "SDL3 GPU renderer ready");
         }
@@ -323,6 +334,7 @@ namespace engine
 
           FrameHandle frame    = renderer.begin_frame();
           TextureHandle target = renderer.swapchain_texture(frame);
+
           if (target != TextureHandle::Invalid)
           {
             std::array<ColorAttachment, 1> color_attachments{ColorAttachment{
@@ -335,12 +347,7 @@ namespace engine
             PassHandle pass = renderer.begin_pass(frame, RenderPassDescription{.color_attachments = color_attachments});
             renderer.end_pass(pass);
           }
-          // Submit unconditionally: a successful begin_frame() (even with a
-          // null/invalid swapchain texture, e.g. minimized window) still owns
-          // a live SDL_GPUCommandBuffer that must be submitted, never
-          // cancelled, to avoid leaking it. submit()'s own guard makes this a
-          // harmless no-op (reported as Severity::Error) if begin_frame()
-          // itself failed.
+
           renderer.submit(frame);
         }
     );
@@ -407,9 +414,11 @@ namespace engine
       app_.report(Severity::Error, "SDL_CreateGPUTexture failed: {}", SDL_GetError());
       return TextureHandle::Invalid;
     }
-    return static_cast<TextureHandle>(textures_.insert(sdl3_detail::TextureRecord{
-        .handle = texture, .width = description.width, .height = description.height, .format = description.format
-    }));
+    return static_cast<TextureHandle>(textures_.insert(
+        TextureRecord{
+            .handle = texture, .width = description.width, .height = description.height, .format = description.format
+        }
+    ));
   }
 
   auto SDL3Renderer::destroy_texture(TextureHandle handle) -> void
@@ -472,12 +481,14 @@ namespace engine
     attributes.reserve(description.vertex_layout.size());
     for (const auto& attribute : description.vertex_layout)
     {
-      attributes.push_back(SDL_GPUVertexAttribute{
-          .location    = attribute.location,
-          .buffer_slot = 0,
-          .format      = to_sdl_vertex_format(attribute.format),
-          .offset      = attribute.offset,
-      });
+      attributes.push_back(
+          SDL_GPUVertexAttribute{
+              .location    = attribute.location,
+              .buffer_slot = 0,
+              .format      = to_sdl_vertex_format(attribute.format),
+              .offset      = attribute.offset,
+          }
+      );
     }
 
     SDL_GPUVertexBufferDescription vertex_buffer{
@@ -575,6 +586,20 @@ namespace engine
 
   auto SDL3Renderer::begin_frame() -> FrameHandle
   {
+    // SDL3 3.2.0's Vulkan backend indexes swapchain semaphores by frame
+    // slot, not by presented image. The engine loop is uncapped, so a new
+    // submit can re-signal a present semaphore while the swapchain still
+    // references it for a presentation whose image has not been re-acquired,
+    // tripping VUID-vkQueueSubmit-pSignalSemaphores-00067. SDL's fence APIs
+    // only cover the submit, not the present, so the only guaranteed way to
+    // know the previous present completed is to drain the device. This
+    // serializes frames; revisit when the renderer actually does work worth
+    // pipelining (or when SDL's backend fixes its semaphore indexing).
+    if (!SDL_WaitForGPUIdle(device_))
+    {
+      app_.report(Severity::Error, "SDL_WaitForGPUIdle failed: {}", SDL_GetError());
+    }
+
     SDL_GPUCommandBuffer* command_buffer = SDL_AcquireGPUCommandBuffer(device_);
     if (command_buffer == nullptr)
     {
@@ -582,17 +607,22 @@ namespace engine
       return FrameHandle::Invalid;
     }
 
+    // WaitAndAcquire, not Acquire: with the device idle this never blocks,
+    // but it is the documented call for rendering to a window, and it
+    // degrades gracefully (swapchain texture may be null) if a present is
+    // ever in flight.
     SDL_GPUTexture* swapchain = nullptr;
-    if (!SDL_AcquireGPUSwapchainTexture(command_buffer, window_, &swapchain, nullptr, nullptr))
+    if (!SDL_WaitAndAcquireGPUSwapchainTexture(command_buffer, window_, &swapchain, nullptr, nullptr))
     {
-      app_.report(Severity::Error, "SDL_AcquireGPUSwapchainTexture failed: {}", SDL_GetError());
+      app_.report(Severity::Error, "SDL_WaitAndAcquireGPUSwapchainTexture failed: {}", SDL_GetError());
       SDL_CancelGPUCommandBuffer(command_buffer);
       return FrameHandle::Invalid;
     }
 
     ++frame_token_;
-    frame_command_buffer_    = command_buffer;
-    frame_swapchain_texture_ = swapchain; // may be null if the window is minimized this frame; callers check swapchain_texture()'s result
+    frame_command_buffer_ = command_buffer;
+    frame_swapchain_texture_
+        = swapchain; // may be null if the window is minimized this frame; callers check swapchain_texture()'s result
     return static_cast<FrameHandle>(frame_token_);
   }
 
@@ -702,7 +732,8 @@ namespace engine
     SDL_ReleaseGPUTransferBuffer(device_, transfer_buffer);
   }
 
-  auto SDL3Renderer::upload_texture(CopyPassHandle pass, TextureHandle texture, std::span<const u8> bytes, u32 bytes_per_row)
+  auto
+  SDL3Renderer::upload_texture(CopyPassHandle pass, TextureHandle texture, std::span<const u8> bytes, u32 bytes_per_row)
       -> void
   {
     if (pass == CopyPassHandle::Invalid || static_cast<u64>(pass) != copy_pass_token_ || copy_pass_ == nullptr)
