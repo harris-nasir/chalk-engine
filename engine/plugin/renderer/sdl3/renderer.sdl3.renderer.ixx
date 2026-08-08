@@ -2,9 +2,11 @@ module;
 
 #include <SDL3/SDL.h>
 
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <span>
+#include <variant>
 #include <vector>
 
 export module engine.renderer.sdl3:renderer;
@@ -25,26 +27,23 @@ export namespace engine
     auto destroy_buffer(BufferHandle handle) -> void;
     auto create_texture(TextureDescription description) -> TextureHandle;
     auto destroy_texture(TextureHandle handle) -> void;
-    auto create_shader(ShaderSource source) -> ShaderHandle;
+    auto create_shader(ShaderDescription description) -> ShaderHandle;
     auto destroy_shader(ShaderHandle handle) -> void;
     auto create_pipeline(PipelineDescription description) -> PipelineHandle;
     auto destroy_pipeline(PipelineHandle handle) -> void;
 
-    [[nodiscard]] auto device() const -> SDL_GPUDevice* { return device_; }
-    [[nodiscard]] auto window() const -> SDL_Window* { return window_; }
-
     auto begin_frame() -> FrameID;
     auto swapchain_texture(FrameID frame) -> TextureHandle;
     auto begin_copy_pass(FrameID frame) -> CopyPassID;
-    auto upload_buffer(CopyPassID pass, BufferHandle buffer, std::span<const u8> bytes) -> void;
-    auto upload_texture(CopyPassID pass, TextureHandle texture, std::span<const u8> bytes, u32 bytes_per_row) -> void;
+    auto upload_buffer(CopyPassID pass, BufferHandle buffer, std::span<const std::byte> bytes) -> void;
+    auto upload_texture(CopyPassID pass, TextureHandle texture, std::span<const std::byte> bytes, u32 bytes_per_row)
+        -> void;
     auto end_copy_pass(CopyPassID pass) -> void;
 
     auto begin_pass(FrameID frame, RenderPassDescription description) -> PassID;
     auto bind_pipeline(PassID pass, PipelineHandle pipeline) -> void;
-    auto bind_vertex_buffer(PassID pass, BufferHandle buffer, u32 slot) -> void;
-    auto bind_index_buffer(PassID pass, BufferHandle buffer) -> void;
-    auto push_uniforms(PassID pass, ShaderStage stage, u32 slot, std::span<const u8> bytes) -> void;
+    auto bind_buffer(PassID pass, BufferHandle buffer, u32 slot) -> void;
+    auto push_uniforms(PassID pass, ShaderStage stage, u32 slot, std::span<const std::byte> bytes) -> void;
     auto draw(PassID pass, u32 vertex_count, u32 instance_count, u32 first_vertex) -> void;
     auto draw_indexed(PassID pass, u32 index_count, u32 instance_count, u32 first_index) -> void;
     auto end_pass(PassID pass) -> void;
@@ -57,7 +56,7 @@ export namespace engine
     SDL_GPUDevice* device_;
     SDL_Window* window_;
 
-    HandleTable<SDL_GPUBuffer*> buffers_;
+    HandleTable<BufferRecord> buffers_;
     HandleTable<TextureRecord> textures_;
     HandleTable<SDL_GPUShader*> shaders_;
     HandleTable<SDL_GPUGraphicsPipeline*> pipelines_;
@@ -79,37 +78,81 @@ export namespace engine
 
 namespace engine
 {
+  namespace
+  {
+    [[nodiscard]] auto make_buffer_handle(BufferUsage type, u64 id) -> BufferHandle
+    {
+      switch (type)
+      {
+        case BufferUsage::Vertex:
+          return static_cast<VertexBufferHandle>(id);
+        case BufferUsage::Index:
+          return static_cast<IndexBufferHandle>(id);
+        case BufferUsage::Uniform:
+          return static_cast<UniformBufferHandle>(id);
+      }
+      return BufferHandle{};
+    }
+  } // namespace
+
   auto SDL3Renderer::create_buffer(BufferDescription description) -> BufferHandle
   {
     if (description.size > std::numeric_limits<u32>::max())
     {
-      app_.report(Severity::Error, "create_buffer: size {} exceeds SDL3 GPU's u32 buffer size limit", description.size);
-      return BufferHandle::Invalid;
+      app_.report(Severity::Error, "size {} exceeds SDL3 GPU's u32 buffer size limit", description.size);
+      return make_buffer_handle(description.usage, 0);
     }
+
+    SDL_GPUBufferUsageFlags usage{};
+    switch (description.usage)
+    {
+      case BufferUsage::Vertex:
+        usage = SDL_GPU_BUFFERUSAGE_VERTEX;
+        break;
+      case BufferUsage::Index:
+        usage = SDL_GPU_BUFFERUSAGE_INDEX;
+        break;
+      case BufferUsage::Uniform:
+        // SDL3 GPU has no persistent uniform-buffer resource: real uniform data
+        // flows through SDL_PushGPU{Vertex,Fragment}UniformData, not a bound
+        // buffer. GRAPHICS_STORAGE_READ is the closest legal usage so the buffer
+        // is still a valid SDL object, usable as a shader storage buffer later.
+        usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
+        break;
+      default:
+        app_.report(Severity::Error, "unsupported buffer type {}", static_cast<u32>(description.usage));
+        return make_buffer_handle(description.usage, 0);
+    }
+
     SDL_GPUBufferCreateInfo info{
-        .usage = to_sdl_buffer_usage(description.usage),
+        .usage = usage,
         .size  = static_cast<u32>(description.size),
         .props = 0,
     };
+
     SDL_GPUBuffer* buffer = SDL_CreateGPUBuffer(device_, &info);
     if (buffer == nullptr)
     {
       app_.report(Severity::Error, "SDL_CreateGPUBuffer failed: {}", SDL_GetError());
-      return BufferHandle::Invalid;
+      return make_buffer_handle(description.usage, 0);
     }
-    return static_cast<BufferHandle>(buffers_.insert(buffer));
+
+    return make_buffer_handle(
+        description.usage, buffers_.insert(BufferRecord{.handle = buffer, .size = description.size})
+    );
   }
 
   auto SDL3Renderer::destroy_buffer(BufferHandle handle) -> void
   {
-    auto* buffer = buffers_.get(static_cast<u64>(handle));
-    if (buffer == nullptr)
+    const u64 id = std::visit([](auto buffer) -> auto { return static_cast<u64>(buffer); }, handle);
+    auto* record = buffers_.get(id);
+    if (record == nullptr)
     {
-      app_.report(Severity::Error, "destroy_buffer: invalid or already-destroyed handle");
+      app_.report(Severity::Error, "invalid or already-destroyed buffer handle (id: {})", id);
       return;
     }
-    SDL_ReleaseGPUBuffer(device_, *buffer);
-    buffers_.destroy(static_cast<u64>(handle));
+    SDL_ReleaseGPUBuffer(device_, record->handle);
+    buffers_.destroy(id);
   }
 
   auto SDL3Renderer::create_texture(TextureDescription description) -> TextureHandle
@@ -143,25 +186,25 @@ namespace engine
     auto* record = textures_.get(static_cast<u64>(handle));
     if (record == nullptr)
     {
-      app_.report(Severity::Error, "destroy_texture: invalid or already-destroyed handle");
+      app_.report(Severity::Error, "invalid or already-destroyed texture handle");
       return;
     }
     SDL_ReleaseGPUTexture(device_, record->handle);
     textures_.destroy(static_cast<u64>(handle));
   }
 
-  auto SDL3Renderer::create_shader(ShaderSource source) -> ShaderHandle
+  auto SDL3Renderer::create_shader(ShaderDescription description) -> ShaderHandle
   {
     SDL_GPUShaderCreateInfo info{
-        .code_size            = source.bytecode.size(),
-        .code                 = source.bytecode.data(),
-        .entrypoint           = source.entry_point,
-        .format               = SDL_GPU_SHADERFORMAT_SPIRV,
-        .stage                = to_sdl_shader_stage(source.stage),
-        .num_samplers         = source.sampler_count,
-        .num_storage_textures = source.storage_texture_count,
-        .num_storage_buffers  = source.storage_buffer_count,
-        .num_uniform_buffers  = source.uniform_buffer_count,
+        .code_size            = description.code.size(),
+        .code                 = description.code.data(),
+        .entrypoint           = description.entry_point,
+        .format               = to_sdl_shader_format(description.format),
+        .stage                = to_sdl_shader_stage(description.stage),
+        .num_samplers         = description.resources.samplers,
+        .num_storage_textures = description.resources.storage_textures,
+        .num_storage_buffers  = description.resources.storage_buffers,
+        .num_uniform_buffers  = description.resources.uniform_buffers,
         .props                = 0,
     };
     SDL_GPUShader* shader = SDL_CreateGPUShader(device_, &info);
@@ -178,7 +221,7 @@ namespace engine
     auto* shader = shaders_.get(static_cast<u64>(handle));
     if (shader == nullptr)
     {
-      app_.report(Severity::Error, "destroy_shader: invalid or already-destroyed handle");
+      app_.report(Severity::Error, "invalid or already-destroyed shader handle");
       return;
     }
     SDL_ReleaseGPUShader(device_, *shader);
@@ -191,7 +234,7 @@ namespace engine
     auto* fragment_shader = shaders_.get(static_cast<u64>(description.fragment_shader));
     if (vertex_shader == nullptr || fragment_shader == nullptr)
     {
-      app_.report(Severity::Error, "create_pipeline: invalid vertex or fragment shader handle");
+      app_.report(Severity::Error, "invalid vertex or fragment shader handle");
       return PipelineHandle::Invalid;
     }
 
@@ -328,7 +371,7 @@ namespace engine
     auto* pipeline = pipelines_.get(static_cast<u64>(handle));
     if (pipeline == nullptr)
     {
-      app_.report(Severity::Error, "destroy_pipeline: invalid or already-destroyed handle");
+      app_.report(Severity::Error, "invalid or already-destroyed pipeline handle");
       return;
     }
     SDL_ReleaseGPUGraphicsPipeline(device_, *pipeline);
@@ -372,7 +415,7 @@ namespace engine
   {
     if (frame == FrameID::Invalid || static_cast<u64>(frame) != frame_token_)
     {
-      app_.report(Severity::Error, "swapchain_texture: frame id does not match the current frame");
+      app_.report(Severity::Error, "frame id does not match the current frame");
       return TextureHandle::Invalid;
     }
     if (frame_swapchain_texture_ == nullptr)
@@ -386,12 +429,12 @@ namespace engine
   {
     if (frame == FrameID::Invalid || static_cast<u64>(frame) != frame_token_ || frame_command_buffer_ == nullptr)
     {
-      app_.report(Severity::Error, "submit: frame id does not match the current frame");
+      app_.report(Severity::Error, "frame id does not match the current frame");
       return;
     }
     if (render_pass_ != nullptr)
     {
-      app_.report(Severity::Error, "submit: called with a pass still open; call end_pass/end_copy_pass first");
+      app_.report(Severity::Error, "called with a pass still open; call end_pass/end_copy_pass first");
       render_pass_ = nullptr;
       copy_pass_   = nullptr;
     }
@@ -407,7 +450,7 @@ namespace engine
   {
     if (frame == FrameID::Invalid || static_cast<u64>(frame) != frame_token_ || frame_command_buffer_ == nullptr)
     {
-      app_.report(Severity::Error, "begin_copy_pass: frame id does not match the current frame");
+      app_.report(Severity::Error, "frame id does not match the current frame");
       return CopyPassID::Invalid;
     }
     SDL_GPUCopyPass* pass = SDL_BeginGPUCopyPass(frame_command_buffer_);
@@ -425,24 +468,32 @@ namespace engine
   {
     if (pass == CopyPassID::Invalid || static_cast<u64>(pass) != copy_pass_token_ || copy_pass_ == nullptr)
     {
-      app_.report(Severity::Error, "end_copy_pass: copy pass id does not match the current copy pass");
+      app_.report(Severity::Error, "copy pass id does not match the current copy pass");
       return;
     }
     SDL_EndGPUCopyPass(copy_pass_);
     copy_pass_ = nullptr;
   }
 
-  auto SDL3Renderer::upload_buffer(CopyPassID pass, BufferHandle buffer, std::span<const u8> bytes) -> void
+  auto SDL3Renderer::upload_buffer(CopyPassID pass, BufferHandle buffer, std::span<const std::byte> bytes) -> void
   {
     if (pass == CopyPassID::Invalid || static_cast<u64>(pass) != copy_pass_token_ || copy_pass_ == nullptr)
     {
-      app_.report(Severity::Error, "upload_buffer: copy pass id does not match the current copy pass");
+      app_.report(Severity::Error, "copy pass id does not match the current copy pass");
       return;
     }
-    auto* destination = buffers_.get(static_cast<u64>(buffer));
-    if (destination == nullptr)
+    const u64 id = std::visit([](auto buffer) -> auto { return static_cast<u64>(buffer); }, buffer);
+    auto* record = buffers_.get(id);
+    if (record == nullptr)
     {
-      app_.report(Severity::Error, "upload_buffer: invalid or already-destroyed buffer handle");
+      app_.report(Severity::Error, "invalid or already-destroyed buffer handle (id: {})", id);
+      return;
+    }
+    if (bytes.size() > record->size)
+    {
+      app_.report(
+          Severity::Error, "data size {} exceeds buffer size {} (id: {})", bytes.size(), record->size, id
+      );
       return;
     }
 
@@ -466,35 +517,36 @@ namespace engine
       return;
     }
     std::memcpy(mapped, bytes.data(), bytes.size());
-    SDL_UnmapGPUTransferBuffer(device_, transfer_buffer);
 
     SDL_GPUTransferBufferLocation source{.transfer_buffer = transfer_buffer, .offset = 0};
-    SDL_GPUBufferRegion destination_region{.buffer = *destination, .offset = 0, .size = static_cast<u32>(bytes.size())};
+    SDL_GPUBufferRegion destination_region{
+        .buffer = record->handle, .offset = 0, .size = static_cast<u32>(bytes.size())
+    };
     SDL_UploadToGPUBuffer(copy_pass_, &source, &destination_region, false);
 
     SDL_ReleaseGPUTransferBuffer(device_, transfer_buffer);
   }
 
-  auto
-  SDL3Renderer::upload_texture(CopyPassID pass, TextureHandle texture, std::span<const u8> bytes, u32 bytes_per_row)
-      -> void
+  auto SDL3Renderer::upload_texture(
+      CopyPassID pass, TextureHandle texture, std::span<const std::byte> bytes, u32 bytes_per_row
+  ) -> void
   {
     if (pass == CopyPassID::Invalid || static_cast<u64>(pass) != copy_pass_token_ || copy_pass_ == nullptr)
     {
-      app_.report(Severity::Error, "upload_texture: copy pass id does not match the current copy pass");
+      app_.report(Severity::Error, "copy pass id does not match the current copy pass");
       return;
     }
     if (static_cast<u64>(texture) == SWAPCHAIN_TEXTURE_HANDLE)
     {
       // Uploading raw bytes directly into the backbuffer isn't a supported
       // path; render into a regular texture and sample/blit it in a pass.
-      app_.report(Severity::Error, "upload_texture: cannot upload directly into the swapchain texture");
+      app_.report(Severity::Error, "cannot upload directly into the swapchain texture");
       return;
     }
     auto* record = textures_.get(static_cast<u64>(texture));
     if (record == nullptr)
     {
-      app_.report(Severity::Error, "upload_texture: invalid or already-destroyed texture handle");
+      app_.report(Severity::Error, "invalid or already-destroyed texture handle");
       return;
     }
 
@@ -551,7 +603,7 @@ namespace engine
   {
     if (frame == FrameID::Invalid || static_cast<u64>(frame) != frame_token_)
     {
-      app_.report(Severity::Error, "begin_pass: frame id does not match the current frame");
+      app_.report(Severity::Error, "frame id does not match the current frame");
       return PassID::Invalid;
     }
 
@@ -562,7 +614,7 @@ namespace engine
       SDL_GPUTexture* texture = resolve_texture(attachment.target);
       if (texture == nullptr)
       {
-        app_.report(Severity::Error, "begin_pass: color attachment has an invalid texture handle");
+        app_.report(Severity::Error, "color attachment has an invalid texture handle");
         return PassID::Invalid;
       }
 
@@ -592,7 +644,7 @@ namespace engine
       SDL_GPUTexture* texture = resolve_texture(description.depth_attachment->target);
       if (texture == nullptr)
       {
-        app_.report(Severity::Error, "begin_pass: depth attachment has an invalid texture handle");
+        app_.report(Severity::Error, "depth attachment has an invalid texture handle");
         return PassID::Invalid;
       }
       depth_target = SDL_GPUDepthStencilTargetInfo{
@@ -628,57 +680,53 @@ namespace engine
   {
     if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || render_pass_ == nullptr)
     {
-      app_.report(Severity::Error, "bind_pipeline: pass id does not match the current pass");
+      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     auto* handle = pipelines_.get(static_cast<u64>(pipeline));
     if (handle == nullptr)
     {
-      app_.report(Severity::Error, "bind_pipeline: invalid or already-destroyed pipeline handle");
+      app_.report(Severity::Error, "invalid or already-destroyed pipeline handle");
       return;
     }
     SDL_BindGPUGraphicsPipeline(render_pass_, *handle);
   }
 
-  auto SDL3Renderer::bind_vertex_buffer(PassID pass, BufferHandle buffer, u32 slot) -> void
+  auto SDL3Renderer::bind_buffer(PassID pass, BufferHandle buffer, u32 slot) -> void
   {
     if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || render_pass_ == nullptr)
     {
-      app_.report(Severity::Error, "bind_vertex_buffer: pass id does not match the current pass");
+      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
-    auto* handle = buffers_.get(static_cast<u64>(buffer));
-    if (handle == nullptr)
+    const u64 id = std::visit([](auto b) -> auto { return static_cast<u64>(b); }, buffer);
+    auto* record = buffers_.get(id);
+    if (record == nullptr)
     {
-      app_.report(Severity::Error, "bind_vertex_buffer: invalid or already-destroyed buffer handle");
+      app_.report(Severity::Error, "invalid or already-destroyed buffer handle (id: {})", id);
       return;
     }
-    SDL_GPUBufferBinding binding{.buffer = *handle, .offset = 0};
-    SDL_BindGPUVertexBuffers(render_pass_, slot, &binding, 1);
+
+    SDL_GPUBufferBinding binding{.buffer = record->handle, .offset = 0};
+    if (std::holds_alternative<VertexBufferHandle>(buffer))
+    {
+      SDL_BindGPUVertexBuffers(render_pass_, slot, &binding, 1);
+    }
+    else if (std::holds_alternative<IndexBufferHandle>(buffer))
+    {
+      SDL_BindGPUIndexBuffer(render_pass_, &binding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+    }
+    else
+    {
+      app_.report(Severity::Error, "uniform buffers cannot be bound to a render pass");
+    }
   }
 
-  auto SDL3Renderer::bind_index_buffer(PassID pass, BufferHandle buffer) -> void
+  auto SDL3Renderer::push_uniforms(PassID pass, ShaderStage stage, u32 slot, std::span<const std::byte> bytes) -> void
   {
     if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || render_pass_ == nullptr)
     {
-      app_.report(Severity::Error, "bind_index_buffer: pass id does not match the current pass");
-      return;
-    }
-    auto* handle = buffers_.get(static_cast<u64>(buffer));
-    if (handle == nullptr)
-    {
-      app_.report(Severity::Error, "bind_index_buffer: invalid or already-destroyed buffer handle");
-      return;
-    }
-    SDL_GPUBufferBinding binding{.buffer = *handle, .offset = 0};
-    SDL_BindGPUIndexBuffer(render_pass_, &binding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
-  }
-
-  auto SDL3Renderer::push_uniforms(PassID pass, ShaderStage stage, u32 slot, std::span<const u8> bytes) -> void
-  {
-    if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || render_pass_ == nullptr)
-    {
-      app_.report(Severity::Error, "push_uniforms: pass id does not match the current pass");
+      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     switch (stage)
@@ -696,7 +744,7 @@ namespace engine
   {
     if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || render_pass_ == nullptr)
     {
-      app_.report(Severity::Error, "draw: pass id does not match the current pass");
+      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     SDL_DrawGPUPrimitives(render_pass_, vertex_count, instance_count, first_vertex, 0);
@@ -706,7 +754,7 @@ namespace engine
   {
     if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || render_pass_ == nullptr)
     {
-      app_.report(Severity::Error, "draw_indexed: pass id does not match the current pass");
+      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     SDL_DrawGPUIndexedPrimitives(render_pass_, index_count, instance_count, first_index, 0, 0);
@@ -716,7 +764,7 @@ namespace engine
   {
     if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || render_pass_ == nullptr)
     {
-      app_.report(Severity::Error, "end_pass: pass id does not match the current pass");
+      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     SDL_EndGPURenderPass(render_pass_);

@@ -1,7 +1,9 @@
 module;
 
 #include <concepts>
+#include <cstddef>
 #include <span>
+#include <variant>
 
 export module engine.renderer.types;
 
@@ -15,30 +17,48 @@ export namespace engine
     f32 r, g, b, a;
   };
 
-  enum class BufferHandle : u64
+  enum class VertexBufferHandle : u64
   {
     Invalid = 0
   };
+
+  enum class IndexBufferHandle : u64
+  {
+    Invalid = 0
+  };
+
+  enum class UniformBufferHandle : u64
+  {
+    Invalid = 0
+  };
+
+  using BufferHandle = std::variant<VertexBufferHandle, IndexBufferHandle, UniformBufferHandle>;
+
   enum class TextureHandle : u64
   {
     Invalid = 0
   };
+
   enum class ShaderHandle : u64
   {
     Invalid = 0
   };
+
   enum class PipelineHandle : u64
   {
     Invalid = 0
   };
+
   enum class FrameID : u64
   {
     Invalid = 0
   };
+
   enum class PassID : u64
   {
     Invalid = 0
   };
+
   enum class CopyPassID : u64
   {
     Invalid = 0
@@ -118,24 +138,35 @@ export namespace engine
     Fragment,
   };
 
-  // Bytecode content is backend-specific (SPIR-V for SDL3 GPU on this
-  // project's Windows/Vulkan path, DXBC/DXIL/MSL for other backends),
-  // supplied as a per-backend asset file. No shader cross-compiler exists
-  // in this build; see the SDL3 backend plan's shader-format note.
-  struct ShaderSource
+  enum class ShaderFormat : u8
   {
-    std::span<const u8> bytecode;
+    Invalid,
+    SPIRV,
+    DXIL,
+    MSL,
+  };
+
+  struct ShaderResourceCounts
+  {
+    u32 samplers         = 0;
+    u32 storage_textures = 0;
+    u32 storage_buffers  = 0;
+    u32 uniform_buffers  = 0;
+  };
+
+  struct ShaderDescription
+  {
+    std::span<const u8> code;
     ShaderStage stage;
-    const char* entry_point   = "main";
-    u32 sampler_count         = 0;
-    u32 storage_texture_count = 0;
-    u32 storage_buffer_count  = 0;
-    u32 uniform_buffer_count  = 0;
+    ShaderFormat format;
+    const char* entry_point = "main";
+    ShaderResourceCounts resources;
   };
 
   struct PipelineDescription
   {
-    ShaderHandle vertex_shader, fragment_shader;
+    ShaderHandle vertex_shader;
+    ShaderHandle fragment_shader;
     std::span<const VertexAttribute> vertex_layout;
     u32 vertex_stride;
     Topology topology;
@@ -180,16 +211,16 @@ export namespace engine
 
   template <typename T>
   concept RendererBackend = requires(
-      T& r, BufferDescription buffer_description, TextureDescription texture_description, ShaderSource shader_source,
-      PipelineDescription pipeline_description, RenderPassDescription pass_description, BufferHandle buffer,
-      TextureHandle texture, ShaderHandle shader, PipelineHandle pipeline, FrameID frame, PassID pass,
-      CopyPassID copy_pass, ShaderStage stage, u32 count, std::span<const u8> bytes
+      T& r, BufferDescription buffer_description, BufferHandle buffer, TextureDescription texture_description,
+      ShaderDescription shader_description, PipelineDescription pipeline_description,
+      RenderPassDescription pass_description, TextureHandle texture, ShaderHandle shader, PipelineHandle pipeline,
+      FrameID frame, PassID pass, CopyPassID copy_pass, ShaderStage stage, u32 count, std::span<const std::byte> bytes
   ) {
     { r.create_buffer(buffer_description) } -> std::same_as<BufferHandle>;
     { r.destroy_buffer(buffer) } -> std::same_as<void>;
     { r.create_texture(texture_description) } -> std::same_as<TextureHandle>;
     { r.destroy_texture(texture) } -> std::same_as<void>;
-    { r.create_shader(shader_source) } -> std::same_as<ShaderHandle>;
+    { r.create_shader(shader_description) } -> std::same_as<ShaderHandle>;
     { r.destroy_shader(shader) } -> std::same_as<void>;
     { r.create_pipeline(pipeline_description) } -> std::same_as<PipelineHandle>;
     { r.destroy_pipeline(pipeline) } -> std::same_as<void>;
@@ -203,8 +234,7 @@ export namespace engine
 
     { r.begin_pass(frame, pass_description) } -> std::same_as<PassID>;
     { r.bind_pipeline(pass, pipeline) } -> std::same_as<void>;
-    { r.bind_vertex_buffer(pass, buffer, count) } -> std::same_as<void>;
-    { r.bind_index_buffer(pass, buffer) } -> std::same_as<void>;
+    { r.bind_buffer(pass, buffer, count) } -> std::same_as<void>;
     { r.push_uniforms(pass, stage, count, bytes) } -> std::same_as<void>;
     { r.draw(pass, count, count, count) } -> std::same_as<void>;
     { r.draw_indexed(pass, count, count, count) } -> std::same_as<void>;

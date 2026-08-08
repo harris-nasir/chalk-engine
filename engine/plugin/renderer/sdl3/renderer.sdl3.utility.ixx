@@ -47,6 +47,12 @@ namespace engine
     std::vector<std::optional<T>> slots_;
   };
 
+  struct BufferRecord
+  {
+    SDL_GPUBuffer* handle;
+    u64 size;
+  };
+
   struct TextureRecord
   {
     SDL_GPUTexture* handle;
@@ -58,25 +64,6 @@ namespace engine
   // Never a real HandleTable index (those start at 1 and grow one at a
   // time), so it can never collide with a created texture's handle.
   constexpr u64 SWAPCHAIN_TEXTURE_HANDLE = ~u64{0};
-
-  [[nodiscard]] auto to_sdl_buffer_usage(engine::BufferUsage usage) -> SDL_GPUBufferUsageFlags
-  {
-    switch (usage)
-    {
-      case engine::BufferUsage::Vertex:
-        return SDL_GPU_BUFFERUSAGE_VERTEX;
-      case engine::BufferUsage::Index:
-        return SDL_GPU_BUFFERUSAGE_INDEX;
-      case engine::BufferUsage::Uniform:
-        // SDL3 GPU has no persistent uniform-buffer resource: real uniform
-        // data flows through SDL_PushGPU{Vertex,Fragment}UniformData, not a
-        // bound buffer. GRAPHICS_STORAGE_READ is the closest legal usage so
-        // a buffer created with this usage is still a valid SDL object,
-        // usable as a shader storage buffer if a future plugin needs one.
-        return SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ;
-    }
-    return 0;
-  }
 
   [[nodiscard]] auto to_sdl_pixel_format(engine::PixelFormat format) -> SDL_GPUTextureFormat
   {
@@ -191,5 +178,21 @@ namespace engine
         return SDL_GPU_SHADERSTAGE_FRAGMENT;
     }
     return SDL_GPU_SHADERSTAGE_VERTEX;
+  }
+
+  [[nodiscard]] auto to_sdl_shader_format(engine::ShaderFormat format) -> SDL_GPUShaderFormat
+  {
+    switch (format)
+    {
+      case engine::ShaderFormat::Invalid:
+        return SDL_GPU_SHADERFORMAT_INVALID;
+      case engine::ShaderFormat::SPIRV:
+        return SDL_GPU_SHADERFORMAT_SPIRV;
+      case engine::ShaderFormat::DXIL:
+        return SDL_GPU_SHADERFORMAT_DXIL;
+      case engine::ShaderFormat::MSL:
+        return SDL_GPU_SHADERFORMAT_MSL;
+    }
+    return SDL_GPU_SHADERFORMAT_INVALID;
   }
 } // namespace engine
