@@ -331,15 +331,29 @@ namespace engine
 
     inline constexpr std::string_view SEVERITY_COLOR_RESET = "\033[0m";
 
+    [[nodiscard]] constexpr auto shorten_function_name(std::string_view name) -> std::string_view
+    {
+      if (const auto open_paren = name.find('('); open_paren != std::string_view::npos)
+      {
+        name = name.substr(0, open_paren);
+      }
+      if (const auto scope = name.rfind("::"); scope != std::string_view::npos)
+      {
+        name = name.substr(scope + 2);
+      }
+      return name;
+    }
+
     inline void print_diagnostic(const DiagnosticMessage& entry)
     {
       std::string_view path = entry.location.file_name();
       auto file_start       = path.find_last_of("/\\");
       std::string_view file = file_start == std::string_view::npos ? path : path.substr(file_start + 1);
-      auto tag_end          = file.find('.');
-      std::string_view tag  = tag_end == std::string_view::npos ? file : file.substr(0, tag_end);
-      std::cout << severity_color(entry.severity) << "[" << tag << "][" << severity_name(entry.severity) << "] " << file
-                << ":" << entry.location.line() << ": " << entry.text << SEVERITY_COLOR_RESET << '\n';
+      const auto severity   = severity_name(entry.severity);
+      std::cout << severity_color(entry.severity) << "[" << severity << "]"
+                << std::string(8 - (severity.size() + 2), ' ') << file << ":" << entry.location.line() << ": "
+                << shorten_function_name(entry.location.function_name()) << "(): " << entry.text << SEVERITY_COLOR_RESET
+                << '\n';
     }
 
   } // namespace
