@@ -2,8 +2,6 @@ module;
 
 #include <SDL3/SDL.h>
 
-#include <array>
-
 export module engine.renderer.sdl3;
 
 import engine.core;
@@ -80,33 +78,9 @@ namespace engine
           }
 
           app.insert_resource<SDL3Renderer>(SDL3Renderer{app, device, window});
+          app.insert_resource<SDL_GPUDevice*>(device);
+          app.insert_resource<SDL_Window*>(window);
           app.report(Severity::Info, "SDL3 GPU renderer ready");
-        }
-    );
-
-    app.add_system(
-        Schedule::Render,
-        [](App& app) -> void
-        {
-          auto& renderer = app.require_resource<SDL3Renderer>();
-
-          FrameID frame        = renderer.begin_frame();
-          TextureHandle target = renderer.swapchain_texture(frame);
-
-          if (target != TextureHandle::Invalid)
-          {
-            std::array<ColorAttachment, 1> color_attachments{ColorAttachment{
-                .target = target,
-                .load   = LoadOp::Clear,  // clear the data already in the texture
-                .store  = StoreOp::Store, // store the data i.e overwrite everything in the texture
-                .clear  = Color{.r = 17.0F / 255.0F, .g = 17.0F / 255.0F, .b = 17.0F / 255.0F, .a = 1.0F},
-            }};
-
-            PassID pass = renderer.begin_pass(frame, RenderPassDescription{.color_attachments = color_attachments});
-            renderer.end_pass(pass);
-          }
-
-          renderer.submit(frame);
         }
     );
 
@@ -114,9 +88,10 @@ namespace engine
         Schedule::Shutdown,
         [](App& app) -> void
         {
-          auto& renderer = app.require_resource<SDL3Renderer>();
-          SDL_ReleaseWindowFromGPUDevice(renderer.device(), renderer.window());
-          SDL_DestroyGPUDevice(renderer.device());
+          auto& device = app.require_resource<SDL_GPUDevice*>();
+          auto& window = app.require_resource<SDL_Window*>();
+          SDL_ReleaseWindowFromGPUDevice(device, window);
+          SDL_DestroyGPUDevice(device);
           app.report(Severity::Info, "SDL3 GPU renderer shut down");
         }
     );
