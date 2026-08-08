@@ -7,6 +7,7 @@ using namespace engine;
 struct Vertex
 {
   f32 x, y, z;
+  f32 r, g, b;
 };
 
 struct State
@@ -27,7 +28,7 @@ public:
           auto& renderer = app.require_resource<Renderer>();
 
           auto vertex_code   = read_file_as_bytes("shaders/position.vertex.spv");
-          auto fragment_code = read_file_as_bytes("shaders/solid_color.fragment.spv");
+          auto fragment_code = read_file_as_bytes("shaders/gradient.fragment.spv");
 
           ShaderDescription description{};
           description.format  = ShaderFormat::SPIRV;
@@ -40,9 +41,8 @@ public:
           ShaderHandle fragment = renderer.create_shader(description);
 
           std::array attributes{
-              VertexAttribute{.location = 0, .offset = 0 * sizeof(f32), .format = VertexFormat::F32},
-              VertexAttribute{.location = 1, .offset = 1 * sizeof(f32), .format = VertexFormat::F32},
-              VertexAttribute{.location = 2, .offset = 2 * sizeof(f32), .format = VertexFormat::F32},
+              VertexAttribute{.location = 0, .offset = 0 * sizeof(f32), .format = VertexFormat::F32x3},
+              VertexAttribute{.location = 1, .offset = 3 * sizeof(f32), .format = VertexFormat::F32x3},
           };
 
           PipelineHandle pipeline = renderer.create_pipeline(
@@ -61,9 +61,9 @@ public:
           renderer.destroy_shader(fragment);
 
           constexpr std::array<Vertex, 3> triangle{{
-              {.x = -0.5F, .y = -0.5F, .z = 0.0F},
-              {.x = 0.5F, .y = -0.5F, .z = 0.0F},
-              {.x = 0.0F, .y = 0.5F, .z = 0.0F},
+              {.x = -0.5F, .y = -0.5F, .z = 0.0F, .r = 1.0F, .g = 0.0F, .b = 0.0F},
+              {.x = 0.5F, .y = -0.5F, .z = 0.0F, .r = 0.0F, .g = 1.0F, .b = 0.0F},
+              {.x = 0.0F, .y = 0.5F, .z = 0.0F, .r = 0.0F, .g = 0.0F, .b = 1.0F},
           }};
 
           BufferHandle vbo = renderer.create_buffer(
