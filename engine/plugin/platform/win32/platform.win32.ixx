@@ -61,7 +61,7 @@ namespace engine
 
     if (window_class_id == 0U)
     {
-      app.report(Severity::Fatal, "Failed to register window class: {}", GetLastError());
+      app.report(Severity::Fatal, "registering window class failed: {}", GetLastError());
     }
 
     RECT rect{
@@ -89,7 +89,7 @@ namespace engine
 
     if (window == nullptr)
     {
-      app.report(Severity::Fatal, "Failed to create window: {}", GetLastError());
+      app.report(Severity::Fatal, "creating window failed: {}", GetLastError());
     }
 
     app.insert_resource<Window>({

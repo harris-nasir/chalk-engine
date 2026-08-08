@@ -29,7 +29,7 @@ namespace engine
           auto& time  = app.require_resource<Time>();
           world.step_count += 1;
           app.report(
-              Severity::Info, "step {:>3} (g={:.2f}, dt {:.4f}s)", world.step_count, world.gravity, time.delta_seconds
+              Severity::Info, "Step {:>3} (g={:.2f}, dt {:.4f}s)", world.step_count, world.gravity, time.delta_seconds
           );
         }
     );

@@ -59,7 +59,7 @@ namespace
     Microsoft::WRL::ComPtr<ID3D11CommandList> command_list;
     if (auto result = state.device_context.deferred_context->FinishCommandList(false, &command_list); FAILED(result))
     {
-      app.report(engine::Severity::Fatal, "Failed to finish command list: {}", result);
+      app.report(engine::Severity::Fatal, "Finishing command list failed: {}", result);
     }
 
     state.device_context.immediate_context->ExecuteCommandList(command_list.Get(), false);
@@ -99,23 +99,23 @@ namespace engine
               );
               FAILED(result))
           {
-            app.report(Severity::Fatal, "Failed to create graphics context: {}", result);
+            app.report(Severity::Fatal, "creating graphics context failed: {}", result);
           }
 
           if (auto result = state.device_context.device->QueryInterface(IID_PPV_ARGS(&state.dxgi_device));
               FAILED(result))
           {
-            app.report(Severity::Fatal, "Failed to retreive dxgi device: {}", result);
+            app.report(Severity::Fatal, "retrieving dxgi device failed: {}", result);
           }
 
           if (auto result = state.dxgi_device->GetParent(IID_PPV_ARGS(&state.dxgi_adapter)); FAILED(result))
           {
-            app.report(Severity::Fatal, "Failed to retreive dxgi adapter: {}", result);
+            app.report(Severity::Fatal, "retrieving dxgi adapter failed: {}", result);
           }
 
           if (auto result = state.dxgi_adapter->GetParent(IID_PPV_ARGS(&state.dxgi_factory)); FAILED(result))
           {
-            app.report(Severity::Fatal, "Failed to retreive dxgi factory: {}", result);
+            app.report(Severity::Fatal, "retrieving dxgi factory failed: {}", result);
           }
 
           const auto swapchain_width{window.width};   // TODO: update when resizing the window
@@ -146,13 +146,13 @@ namespace engine
               );
               FAILED(result))
           {
-            app.report(Severity::Fatal, "Failed to create Swapchain: {}", result);
+            app.report(Severity::Fatal, "creating swapchain failed: {}", result);
           }
 
           Microsoft::WRL::ComPtr<ID3D11Texture2D> buffer{};
           if (auto result = state.swapchain.handle->GetBuffer(0, IID_PPV_ARGS(&buffer)); FAILED(result))
           {
-            app.report(Severity::Fatal, "Failed to get buffer from Swapchain: {}", result);
+            app.report(Severity::Fatal, "retrieving swapchain buffer failed: {}", result);
           }
 
           if (auto result = state.device_context.device->CreateRenderTargetView(
@@ -160,18 +160,18 @@ namespace engine
               );
               FAILED(result))
           {
-            app.report(Severity::Fatal, "Failed to create Render Target View: {}", result);
+            app.report(Severity::Fatal, "creating render target view failed: {}", result);
           }
 
           if (auto result
               = state.device_context.device->CreateDeferredContext(0, &state.device_context.deferred_context);
               FAILED(result))
           {
-            app.report(Severity::Fatal, "Failed to create Deferred Context: {}", result);
+            app.report(Severity::Fatal, "creating deferred context failed: {}", result);
           }
 
           app.insert_resource<State>(state); // TODO: split this struct into smaller resourecs
-          app.report(Severity::Info, "Renderer ready");
+          app.report(Severity::Info, "dx11 renderer ready");
         }
     );
 
@@ -194,7 +194,7 @@ namespace engine
           bool is_vsync_enabled{false}; // TODO: put somewhere better
           if (auto result = state.swapchain.handle->Present(is_vsync_enabled, 0); FAILED(result))
           {
-            app.report(Severity::Fatal, "Failed to present swapchain: {}", result);
+            app.report(Severity::Fatal, "presenting swapchain failed: {}", result);
           }
         }
     );

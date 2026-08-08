@@ -99,7 +99,7 @@ namespace engine
   {
     if (description.size > std::numeric_limits<u32>::max())
     {
-      app_.report(Severity::Error, "size {} exceeds SDL3 GPU's u32 buffer size limit", description.size);
+      app_.report(Severity::Error, "size {} exceeds sdl3 gpu's u32 buffer size limit", description.size);
       return make_buffer_handle(description.usage, 0);
     }
 

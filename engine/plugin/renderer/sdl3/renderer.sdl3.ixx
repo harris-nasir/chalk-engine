@@ -41,7 +41,7 @@ namespace engine
 
             if (native.kind != NativeWindowKind::Win32)
             {
-              app.report(Severity::Fatal, "SDL3 renderer: cannot wrap a non-Win32 native window");
+              app.report(Severity::Fatal, "cannot wrap a non-win32 native window");
             }
 
             SDL_PropertiesID props = SDL_CreateProperties();
@@ -80,7 +80,7 @@ namespace engine
           app.insert_resource<SDL3Renderer>(SDL3Renderer{app, device, window});
           app.insert_resource<SDL_GPUDevice*>(device);
           app.insert_resource<SDL_Window*>(window);
-          app.report(Severity::Info, "SDL3 GPU renderer ready");
+          app.report(Severity::Info, "sdl3 gpu renderer ready");
         }
     );
 
@@ -92,7 +92,7 @@ namespace engine
           auto& window = app.require_resource<SDL_Window*>();
           SDL_ReleaseWindowFromGPUDevice(device, window);
           SDL_DestroyGPUDevice(device);
-          app.report(Severity::Info, "SDL3 GPU renderer shut down");
+          app.report(Severity::Info, "sdl3 gpu renderer shut down");
         }
     );
   }
