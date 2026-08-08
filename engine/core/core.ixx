@@ -5,6 +5,7 @@ module;
 #include <chrono>
 #include <cstdlib>
 #include <format>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -25,6 +26,42 @@ export import :type;
 namespace engine
 {
   using Clock = std::chrono::steady_clock;
+} // namespace engine
+
+export namespace engine
+{
+  [[nodiscard]] inline auto read_file(std::string_view path) -> std::string
+  {
+    std::ifstream file(std::string(path), std::ios::binary | std::ios::ate);
+    if (!file)
+    {
+      return {};
+    }
+
+    auto size = static_cast<size_t>(file.tellg());
+    std::string text(size, '\0');
+    file.seekg(0);
+    file.read(text.data(), size);
+    return text;
+  }
+
+  [[nodiscard]] inline auto read_file_as_bytes(std::string_view path) -> std::vector<u8>
+  {
+    std::ifstream file(std::string(path), std::ios::binary | std::ios::ate);
+    if (!file)
+    {
+      return {};
+    }
+
+    auto size = static_cast<size_t>(file.tellg());
+    std::vector<char> raw(size);
+    file.seekg(0);
+    file.read(raw.data(), size);
+
+    std::vector<u8> bytes(size);
+    std::ranges::transform(raw, bytes.begin(), [](char c) { return static_cast<u8>(c); });
+    return bytes;
+  }
 } // namespace engine
 
 export namespace engine::detail
