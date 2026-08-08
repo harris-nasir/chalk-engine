@@ -26,6 +26,12 @@
     "show_command": false
   },
   {
+    "label": "compile shaders",
+    "command": "cmake --build --preset clang --target shaders",
+    "show_command": false,
+    "hide": "on_success"
+  },
+  {
     "label": "rebuild",
     "command": "cmake --build --preset clang --target clean && cmake --build --preset clang",
     "show_command": false,

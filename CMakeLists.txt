@@ -28,6 +28,78 @@ CPMFindPackage(
   SYSTEM TRUE
 )
 
+CPMAddPackage(
+  NAME SPIRV-Cross
+  GITHUB_REPOSITORY KhronosGroup/SPIRV-Cross
+  GIT_TAG main
+  OPTIONS
+    "SPIRV_CROSS_STATIC ON"
+    "SPIRV_CROSS_SHARED OFF"
+    "SPIRV_CROSS_CLI OFF"
+    "SPIRV_CROSS_ENABLE_TESTS OFF"
+  SYSTEM TRUE
+)
+# SDL_shadercross guards its spirv-cross dependency behind an underscore-named
+# target check; alias the hyphenated target it actually links against.
+add_library(spirv_cross_c ALIAS spirv-cross-c)
+
+CPMFindPackage(
+  NAME SDL3_shadercross
+  GITHUB_REPOSITORY libsdl-org/SDL_shadercross
+  GIT_TAG e55cf5e31ced6f3d1be5cc6d0c50e99384f9f4ba
+  OPTIONS
+    "SDLSHADERCROSS_VENDORED OFF"
+    "SDLSHADERCROSS_DXC ON"
+    "SDLSHADERCROSS_SPIRVCROSS_SHARED OFF"
+    "SDLSHADERCROSS_SHARED OFF"
+    "SDLSHADERCROSS_STATIC ON"
+    "SDLSHADERCROSS_CLI ON"
+    "SDLSHADERCROSS_INSTALL OFF"
+    "SDLSHADERCROSS_TESTS OFF"
+  SYSTEM TRUE
+)
+# shadercross loads dxcompiler.dll/dxil.dll from its own directory at runtime.
+if(TARGET DirectXShaderCompiler::dxcompiler)
+  add_custom_command(TARGET shadercross POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "$<TARGET_FILE:DirectXShaderCompiler::dxcompiler>"
+      "$<TARGET_FILE_DIR:shadercross>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "$<TARGET_FILE:DirectXShaderCompiler::dxil>"
+      "$<TARGET_FILE_DIR:shadercross>"
+    VERBATIM
+  )
+endif()
+
+# Compile HLSL shaders to SPIR-V with the shadercross CLI whenever they change.
+# Outputs land in <build>/shaders, next to the executable. Stage comes from the
+# filename suffix: *.vertex.hlsl / *.fragment.hlsl / *.compute.hlsl.
+set(SHADERS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders")
+set(SHADERS_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
+file(GLOB_RECURSE SHADER_SOURCES CONFIGURE_DEPENDS "${SHADERS_SOURCE_DIR}/*.hlsl")
+
+set(SPIRV_OUTPUTS "")
+foreach(shader IN LISTS SHADER_SOURCES)
+  if(NOT shader MATCHES "\.(vertex|fragment|compute)\.hlsl$")
+    message(WARNING "Skipping ${shader}: cannot derive shader stage from filename")
+    continue()
+  endif()
+  set(stage "${CMAKE_MATCH_1}")
+  get_filename_component(stem "${shader}" NAME)
+  string(REGEX REPLACE "\.hlsl$" "" stem "${stem}")
+  set(output "${SHADERS_OUTPUT_DIR}/${stem}.spv")
+  add_custom_command(
+    OUTPUT "${output}"
+    COMMAND "$<TARGET_FILE:shadercross>" "${shader}" -s HLSL -d SPIRV -t "${stage}" -o "${output}"
+    DEPENDS "${shader}" shadercross
+    COMMENT "Compiling ${stem}.hlsl -> ${stem}.spv"
+    VERBATIM
+  )
+  list(APPEND SPIRV_OUTPUTS "${output}")
+endforeach()
+
+add_custom_target(shaders ALL DEPENDS ${SPIRV_OUTPUTS})
+
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "source/*.cxx")
 file(GLOB_RECURSE MODULE_SOURCES CONFIGURE_DEPENDS "engine/*.ixx" "source/*.ixx")
 
@@ -40,6 +112,15 @@ target_sources(${PROJECT_NAME}
   PRIVATE
   FILE_SET CXX_MODULES
   FILES ${MODULE_SOURCES}
+)
+
+add_dependencies(${PROJECT_NAME} shaders)
+
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+    "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assets"
+  VERBATIM
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3 SDL3_image::SDL3_image d3d11)
