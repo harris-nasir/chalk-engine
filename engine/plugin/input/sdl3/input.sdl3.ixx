@@ -1,6 +1,7 @@
 module;
 
 #include <SDL3/SDL.h>
+#include <cstddef>
 #include <windows.h>
 
 export module engine.input.sdl3;
