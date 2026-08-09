@@ -2,11 +2,8 @@ module;
 
 #include <concepts>
 #include <cstddef>
-#include <optional>
 #include <span>
-#include <utility>
 #include <variant>
-#include <vector>
 
 export module engine.renderer.types;
 
@@ -213,44 +210,6 @@ export namespace engine
     Option<DepthAttachment> depth_attachment{}; // empty = no depth buffer bound
   };
 
-  // Generic 1-based index table shared by every backend's resource records
-  // (buffers/textures/shaders/pipelines): index 0 is reserved for Invalid,
-  // and indices are never reused, so a stale handle reliably misses instead
-  // of silently aliasing a newer resource.
-  template <typename T>
-  class HandleTable
-  {
-  public:
-    auto insert(T value) -> u64
-    {
-      slots_.push_back(std::move(value));
-      return slots_.size(); // 1-based; 0 is reserved for Invalid, and indices are never reused
-    }
-
-    [[nodiscard]] auto get(u64 handle) -> T*
-    {
-      if (handle == 0 || handle > slots_.size())
-      {
-        return nullptr;
-      }
-      auto& slot = slots_[handle - 1];
-      return slot ? &*slot : nullptr;
-    }
-
-    auto destroy(u64 handle) -> bool
-    {
-      if (get(handle) == nullptr)
-      {
-        return false;
-      }
-      slots_[handle - 1].reset();
-      return true;
-    }
-
-  private:
-    std::vector<std::optional<T>> slots_;
-  };
-
   template <typename T>
   concept RendererBackend = requires(
       T& r, BufferDescription buffer_description, BufferHandle buffer, TextureDescription texture_description,
@@ -267,6 +226,8 @@ export namespace engine
     { r.create_pipeline(pipeline_description) } -> std::same_as<PipelineHandle>;
     { r.destroy_pipeline(pipeline) } -> std::same_as<void>;
 
+    { r.resize(count, count) } -> std::same_as<void>;
+
     { r.begin_frame() } -> std::same_as<FrameID>;
     { r.swapchain_texture(frame) } -> std::same_as<TextureHandle>;
     { r.begin_copy_pass(frame) } -> std::same_as<CopyPassID>;
@@ -277,6 +238,7 @@ export namespace engine
     { r.begin_pass(frame, pass_description) } -> std::same_as<PassID>;
     { r.bind_pipeline(pass, pipeline) } -> std::same_as<void>;
     { r.bind_buffer(pass, buffer, count) } -> std::same_as<void>;
+    { r.bind_texture(pass, stage, count, texture) } -> std::same_as<void>;
     { r.push_uniforms(pass, stage, count, bytes) } -> std::same_as<void>;
     { r.draw(pass, count, count, count) } -> std::same_as<void>;
     { r.draw_indexed(pass, count, count, count) } -> std::same_as<void>;

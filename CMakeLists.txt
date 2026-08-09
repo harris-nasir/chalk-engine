@@ -61,6 +61,8 @@ target_sources(chalk_core
     engine/core/core.type.ixx
     engine/plugin/platform/platform.ixx
     engine/plugin/renderer/renderer.types.ixx
+    engine/plugin/renderer/renderer.handle_table.ixx
+    engine/plugin/renderer/renderer.token_guard.ixx
     engine/plugin/audio/audio.ixx
     engine/plugin/input/input.ixx
     engine/plugin/physics/physics.ixx
