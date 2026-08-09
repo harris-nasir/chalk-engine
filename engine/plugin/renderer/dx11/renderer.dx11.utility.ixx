@@ -22,8 +22,9 @@ namespace engine
   struct TextureRecord
   {
     Microsoft::WRL::ComPtr<ID3D11Texture2D> handle;
-    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> render_target_view; // set iff ColorTarget usage
-    Microsoft::WRL::ComPtr<ID3D11DepthStencilView> depth_stencil_view; // set iff DepthTarget usage
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> render_target_view;     // set iff ColorTarget usage
+    Microsoft::WRL::ComPtr<ID3D11DepthStencilView> depth_stencil_view;     // set iff DepthTarget usage
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> shader_resource_view; // set iff Sampled usage
     u32 width;
     u32 height;
     PixelFormat format;

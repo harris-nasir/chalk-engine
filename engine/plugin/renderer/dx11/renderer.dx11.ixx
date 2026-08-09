@@ -147,7 +147,9 @@ namespace engine
               std::move(deferred_context),
               std::move(swapchain),
               std::move(render_target_view),
-              feature_level
+              feature_level,
+              swapchain_description.BufferDesc.Width,
+              swapchain_description.BufferDesc.Height
           });
           app.report(Severity::Info, "dx11 renderer ready");
         }

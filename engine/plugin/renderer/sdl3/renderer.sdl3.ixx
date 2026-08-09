@@ -88,6 +88,8 @@ namespace engine
         Schedule::Shutdown,
         [](App& app) -> void
         {
+          app.require_resource<SDL3Renderer>().release_sampler();
+
           auto& device = app.require_resource<SDL_GPUDevice*>();
           auto& window = app.require_resource<SDL_Window*>();
           SDL_ReleaseWindowFromGPUDevice(device, window);

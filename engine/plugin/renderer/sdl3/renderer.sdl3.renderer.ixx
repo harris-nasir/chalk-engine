@@ -13,6 +13,8 @@ export module engine.renderer.sdl3:renderer;
 
 import engine.core;
 import engine.renderer.types;
+import engine.renderer.handle_table;
+import engine.renderer.token_guard;
 import :utility;
 
 export namespace engine
@@ -21,7 +23,41 @@ export namespace engine
   class SDL3Renderer
   {
   public:
-    SDL3Renderer(App& app, SDL_GPUDevice* device, SDL_Window* window) : app_(app), device_(device), window_(window) {}
+    SDL3Renderer(App& app, SDL_GPUDevice* device, SDL_Window* window) : app_(app), device_(device), window_(window)
+    {
+      // TODO: make configurable with SamplerDescription
+      SDL_GPUSamplerCreateInfo sampler_info{
+          .min_filter        = SDL_GPU_FILTER_NEAREST,
+          .mag_filter        = SDL_GPU_FILTER_NEAREST,
+          .mipmap_mode       = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST,
+          .address_mode_u    = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+          .address_mode_v    = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+          .address_mode_w    = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+          .mip_lod_bias      = 0,
+          .max_anisotropy    = 1,
+          .compare_op        = SDL_GPU_COMPAREOP_ALWAYS,
+          .min_lod           = 0,
+          .max_lod           = 0,
+          .enable_anisotropy = false,
+          .enable_compare    = false,
+          .padding1          = 0,
+          .padding2          = 0,
+      };
+      sampler_ = SDL_CreateGPUSampler(device_, &sampler_info);
+      if (sampler_ == nullptr)
+      {
+        app_.report(Severity::Fatal, "SDL_CreateGPUSampler failed: {}", SDL_GetError());
+      }
+    }
+
+    auto release_sampler() -> void
+    {
+      if (sampler_ != nullptr)
+      {
+        SDL_ReleaseGPUSampler(device_, sampler_);
+        sampler_ = nullptr;
+      }
+    }
 
     auto create_buffer(BufferDescription description) -> BufferHandle;
     auto destroy_buffer(BufferHandle handle) -> void;
@@ -31,6 +67,8 @@ export namespace engine
     auto destroy_shader(ShaderHandle handle) -> void;
     auto create_pipeline(PipelineDescription description) -> PipelineHandle;
     auto destroy_pipeline(PipelineHandle handle) -> void;
+
+    auto resize(u32 width, u32 height) -> void;
 
     auto begin_frame() -> FrameID;
     auto swapchain_texture(FrameID frame) -> TextureHandle;
@@ -43,6 +81,7 @@ export namespace engine
     auto begin_pass(FrameID frame, RenderPassDescription description) -> PassID;
     auto bind_pipeline(PassID pass, PipelineHandle pipeline) -> void;
     auto bind_buffer(PassID pass, BufferHandle buffer, u32 slot) -> void;
+    auto bind_texture(PassID pass, ShaderStage stage, u32 slot, TextureHandle texture) -> void;
     auto push_uniforms(PassID pass, ShaderStage stage, u32 slot, std::span<const std::byte> bytes) -> void;
     auto draw(PassID pass, u32 vertex_count, u32 instance_count, u32 first_vertex) -> void;
     auto draw_indexed(PassID pass, u32 index_count, u32 instance_count, u32 first_index) -> void;
@@ -55,20 +94,21 @@ export namespace engine
     App& app_;
     SDL_GPUDevice* device_;
     SDL_Window* window_;
+    SDL_GPUSampler* sampler_ = nullptr; // one default sampler, see the constructor
 
     HandleTable<BufferRecord> buffers_;
     HandleTable<TextureRecord> textures_;
     HandleTable<SDL_GPUShader*> shaders_;
     HandleTable<SDL_GPUGraphicsPipeline*> pipelines_;
 
-    u64 frame_token_                            = 0;
+    TokenGuard<FrameID> frame_guard_;
     SDL_GPUCommandBuffer* frame_command_buffer_ = nullptr;
     SDL_GPUTexture* frame_swapchain_texture_    = nullptr;
 
-    u64 copy_pass_token_        = 0;
+    TokenGuard<CopyPassID> copy_pass_guard_;
     SDL_GPUCopyPass* copy_pass_ = nullptr;
 
-    u64 pass_token_                 = 0;
+    TokenGuard<PassID> pass_guard_;
     SDL_GPURenderPass* render_pass_ = nullptr;
   };
 
@@ -382,6 +422,12 @@ namespace engine
     pipelines_.destroy(static_cast<u64>(handle));
   }
 
+  auto SDL3Renderer::resize(u32 /*width*/, u32 /*height*/) -> void
+  {
+    // SDL3 GPU tracks the window's size itself and resizes the swapchain the
+    // next time begin_frame() acquires it; nothing to do here explicitly.
+  }
+
   auto SDL3Renderer::resolve_texture(TextureHandle handle) -> SDL_GPUTexture*
   {
     if (static_cast<u64>(handle) == SWAPCHAIN_TEXTURE_HANDLE)
@@ -409,17 +455,15 @@ namespace engine
       return FrameID::Invalid;
     }
 
-    ++frame_token_;
     frame_command_buffer_    = command_buffer;
     frame_swapchain_texture_ = swapchain; // may be null, not an error but must be checked.
-    return static_cast<FrameID>(frame_token_);
+    return frame_guard_.begin();
   }
 
   auto SDL3Renderer::swapchain_texture(FrameID frame) -> TextureHandle
   {
-    if (frame == FrameID::Invalid || static_cast<u64>(frame) != frame_token_)
+    if (!frame_guard_.check(frame, app_, "frame"))
     {
-      app_.report(Severity::Error, "frame id does not match the current frame");
       return TextureHandle::Invalid;
     }
     if (frame_swapchain_texture_ == nullptr)
@@ -431,16 +475,17 @@ namespace engine
 
   auto SDL3Renderer::submit(FrameID frame) -> void
   {
-    if (frame == FrameID::Invalid || static_cast<u64>(frame) != frame_token_ || frame_command_buffer_ == nullptr)
+    if (!frame_guard_.check(frame, app_, "frame"))
     {
-      app_.report(Severity::Error, "frame id does not match the current frame");
       return;
     }
-    if (render_pass_ != nullptr)
+    if (render_pass_ != nullptr || copy_pass_ != nullptr)
     {
       app_.report(Severity::Error, "called with a pass still open; call end_pass/end_copy_pass first");
       render_pass_ = nullptr;
       copy_pass_   = nullptr;
+      pass_guard_.end();
+      copy_pass_guard_.end();
     }
     if (!SDL_SubmitGPUCommandBuffer(frame_command_buffer_))
     {
@@ -448,13 +493,13 @@ namespace engine
     }
     frame_command_buffer_    = nullptr;
     frame_swapchain_texture_ = nullptr;
+    frame_guard_.end();
   }
 
   auto SDL3Renderer::begin_copy_pass(FrameID frame) -> CopyPassID
   {
-    if (frame == FrameID::Invalid || static_cast<u64>(frame) != frame_token_ || frame_command_buffer_ == nullptr)
+    if (!frame_guard_.check(frame, app_, "frame"))
     {
-      app_.report(Severity::Error, "frame id does not match the current frame");
       return CopyPassID::Invalid;
     }
     SDL_GPUCopyPass* pass = SDL_BeginGPUCopyPass(frame_command_buffer_);
@@ -463,27 +508,25 @@ namespace engine
       app_.report(Severity::Error, "SDL_BeginGPUCopyPass failed: {}", SDL_GetError());
       return CopyPassID::Invalid;
     }
-    ++copy_pass_token_;
     copy_pass_ = pass;
-    return static_cast<CopyPassID>(copy_pass_token_);
+    return copy_pass_guard_.begin();
   }
 
   auto SDL3Renderer::end_copy_pass(CopyPassID pass) -> void
   {
-    if (pass == CopyPassID::Invalid || static_cast<u64>(pass) != copy_pass_token_ || copy_pass_ == nullptr)
+    if (!copy_pass_guard_.check(pass, app_, "copy pass"))
     {
-      app_.report(Severity::Error, "copy pass id does not match the current copy pass");
       return;
     }
     SDL_EndGPUCopyPass(copy_pass_);
     copy_pass_ = nullptr;
+    copy_pass_guard_.end();
   }
 
   auto SDL3Renderer::upload_buffer(CopyPassID pass, BufferHandle buffer, std::span<const std::byte> bytes) -> void
   {
-    if (pass == CopyPassID::Invalid || static_cast<u64>(pass) != copy_pass_token_ || copy_pass_ == nullptr)
+    if (!copy_pass_guard_.check(pass, app_, "copy pass"))
     {
-      app_.report(Severity::Error, "copy pass id does not match the current copy pass");
       return;
     }
     const u64 id = std::visit([](auto buffer) -> auto { return static_cast<u64>(buffer); }, buffer);
@@ -533,9 +576,8 @@ namespace engine
       CopyPassID pass, TextureHandle texture, std::span<const std::byte> bytes, u32 bytes_per_row
   ) -> void
   {
-    if (pass == CopyPassID::Invalid || static_cast<u64>(pass) != copy_pass_token_ || copy_pass_ == nullptr)
+    if (!copy_pass_guard_.check(pass, app_, "copy pass"))
     {
-      app_.report(Severity::Error, "copy pass id does not match the current copy pass");
       return;
     }
     if (static_cast<u64>(texture) == SWAPCHAIN_TEXTURE_HANDLE)
@@ -603,9 +645,8 @@ namespace engine
 
   auto SDL3Renderer::begin_pass(FrameID frame, RenderPassDescription description) -> PassID
   {
-    if (frame == FrameID::Invalid || static_cast<u64>(frame) != frame_token_)
+    if (!frame_guard_.check(frame, app_, "frame"))
     {
-      app_.report(Severity::Error, "frame id does not match the current frame");
       return PassID::Invalid;
     }
 
@@ -673,16 +714,14 @@ namespace engine
       return PassID::Invalid;
     }
 
-    ++pass_token_;
     render_pass_ = pass;
-    return static_cast<PassID>(pass_token_);
+    return pass_guard_.begin();
   }
 
   auto SDL3Renderer::bind_pipeline(PassID pass, PipelineHandle pipeline) -> void
   {
-    if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || render_pass_ == nullptr)
+    if (!pass_guard_.check(pass, app_, "pass"))
     {
-      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     auto* handle = pipelines_.get(static_cast<u64>(pipeline));
@@ -696,9 +735,8 @@ namespace engine
 
   auto SDL3Renderer::bind_buffer(PassID pass, BufferHandle buffer, u32 slot) -> void
   {
-    if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || render_pass_ == nullptr)
+    if (!pass_guard_.check(pass, app_, "pass"))
     {
-      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     const u64 id = std::visit([](auto b) -> auto { return static_cast<u64>(b); }, buffer);
@@ -724,11 +762,35 @@ namespace engine
     }
   }
 
+  auto SDL3Renderer::bind_texture(PassID pass, ShaderStage stage, u32 slot, TextureHandle texture) -> void
+  {
+    if (!pass_guard_.check(pass, app_, "pass"))
+    {
+      return;
+    }
+    SDL_GPUTexture* resolved = resolve_texture(texture);
+    if (resolved == nullptr)
+    {
+      app_.report(Severity::Error, "invalid or already-destroyed texture handle");
+      return;
+    }
+
+    SDL_GPUTextureSamplerBinding binding{.texture = resolved, .sampler = sampler_};
+    switch (stage)
+    {
+      case ShaderStage::Vertex:
+        SDL_BindGPUVertexSamplers(render_pass_, slot, &binding, 1);
+        break;
+      case ShaderStage::Fragment:
+        SDL_BindGPUFragmentSamplers(render_pass_, slot, &binding, 1);
+        break;
+    }
+  }
+
   auto SDL3Renderer::push_uniforms(PassID pass, ShaderStage stage, u32 slot, std::span<const std::byte> bytes) -> void
   {
-    if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || render_pass_ == nullptr)
+    if (!pass_guard_.check(pass, app_, "pass"))
     {
-      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     switch (stage)
@@ -744,9 +806,8 @@ namespace engine
 
   auto SDL3Renderer::draw(PassID pass, u32 vertex_count, u32 instance_count, u32 first_vertex) -> void
   {
-    if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || render_pass_ == nullptr)
+    if (!pass_guard_.check(pass, app_, "pass"))
     {
-      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     SDL_DrawGPUPrimitives(render_pass_, vertex_count, instance_count, first_vertex, 0);
@@ -754,9 +815,8 @@ namespace engine
 
   auto SDL3Renderer::draw_indexed(PassID pass, u32 index_count, u32 instance_count, u32 first_index) -> void
   {
-    if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || render_pass_ == nullptr)
+    if (!pass_guard_.check(pass, app_, "pass"))
     {
-      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     SDL_DrawGPUIndexedPrimitives(render_pass_, index_count, instance_count, first_index, 0, 0);
@@ -764,12 +824,12 @@ namespace engine
 
   auto SDL3Renderer::end_pass(PassID pass) -> void
   {
-    if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || render_pass_ == nullptr)
+    if (!pass_guard_.check(pass, app_, "pass"))
     {
-      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     SDL_EndGPURenderPass(render_pass_);
     render_pass_ = nullptr;
+    pass_guard_.end();
   }
 } // namespace engine

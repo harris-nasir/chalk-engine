@@ -35,6 +35,20 @@ namespace
         break;
       }
 
+      case WM_SIZE:
+      {
+        // Set once, right after CreateWindowEx, via SetWindowLongPtr(GWLP_USERDATA, ...)
+        // in PlatformWin32Plugin::build: this WNDPROC has no other way to reach
+        // the Window resource, since Win32 dispatches to it directly.
+        auto* window_resource = reinterpret_cast<engine::Window*>(GetWindowLongPtr(window, GWLP_USERDATA));
+        if (window_resource != nullptr)
+        {
+          window_resource->width  = LOWORD(l_param);
+          window_resource->height = HIWORD(l_param);
+        }
+        break;
+      }
+
       default:
       {
         return DefWindowProc(window, message, w_param, l_param);
@@ -64,21 +78,36 @@ namespace engine
       app.report(Severity::Fatal, "registering window class failed: {}", GetLastError());
     }
 
-    RECT rect{
-        .left   = 0,
-        .top    = 0,
-        .right  = static_cast<LONG>(description_.width),
-        .bottom = static_cast<LONG>(description_.height)
-    };
-    AdjustWindowRect(&rect, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, 0);
+    DWORD style = (description_.is_borderless || description_.is_fullscreen)
+                      ? WS_POPUP
+                      : WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    if (description_.is_resizeable && !description_.is_fullscreen)
+    {
+      style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
+    }
+
+    int x      = CW_USEDEFAULT;
+    int y      = CW_USEDEFAULT;
+    u32 width  = description_.width;
+    u32 height = description_.height;
+    if (description_.is_fullscreen)
+    {
+      x      = 0;
+      y      = 0;
+      width  = static_cast<u32>(GetSystemMetrics(SM_CXSCREEN));
+      height = static_cast<u32>(GetSystemMetrics(SM_CYSCREEN));
+    }
+
+    RECT rect{.left = 0, .top = 0, .right = static_cast<LONG>(width), .bottom = static_cast<LONG>(height)};
+    AdjustWindowRect(&rect, style, 0);
 
     auto* window{CreateWindowEx(
         0,
         MAKEINTATOM(window_class_id),
         description_.title.c_str(),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
+        style,
+        x,
+        y,
         rect.right - rect.left,
         rect.bottom - rect.top,
         nullptr,
@@ -93,18 +122,41 @@ namespace engine
     }
 
     app.insert_resource<Window>({
-        .title  = description_.title,
-        .width  = description_.width,
-        .height = description_.height,
+        .title         = description_.title,
+        .width         = width,
+        .height        = height,
+        .is_fullscreen = description_.is_fullscreen,
+        .is_hidden     = description_.is_hidden,
+        .is_borderless = description_.is_borderless,
+        .is_minimized  = description_.is_minimized,
+        .is_maximized  = description_.is_maximized,
+        .is_resizeable = description_.is_resizeable,
     });
 
     app.insert_resource<NativeWindowHandle>({.kind = NativeWindowKind::Win32, .handle = window});
 
-    app.report(
-        Severity::Info, "opened window \"{}\" ({}x{})", description_.title, description_.width, description_.height
-    );
+    // Lets window_procedure (a raw WNDPROC with no App& access) reach the
+    // Window resource directly when it gets WM_SIZE; require_resource returns
+    // a stable reference into App's resource map for as long as this Window
+    // resource lives, which is the whole run (nothing re-inserts it later).
+    SetWindowLongPtr(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&app.require_resource<Window>()));
 
-    ShowWindow(window, SW_SHOW);
+    app.report(Severity::Info, "opened window \"{}\" ({}x{})", description_.title, width, height);
+
+    int show_command = SW_SHOW;
+    if (description_.is_hidden)
+    {
+      show_command = SW_HIDE;
+    }
+    else if (description_.is_minimized)
+    {
+      show_command = SW_SHOWMINIMIZED;
+    }
+    else if (description_.is_maximized)
+    {
+      show_command = SW_SHOWMAXIMIZED;
+    }
+    ShowWindow(window, show_command);
 
     app.add_system(
         Schedule::PreUpdate,

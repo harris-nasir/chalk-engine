@@ -18,6 +18,8 @@ export module engine.renderer.dx11:renderer;
 
 import engine.core;
 import engine.renderer.types;
+import engine.renderer.handle_table;
+import engine.renderer.token_guard;
 import :utility;
 
 export namespace engine
@@ -30,7 +32,8 @@ export namespace engine
         App& app, Microsoft::WRL::ComPtr<ID3D11Device> device,
         Microsoft::WRL::ComPtr<ID3D11DeviceContext> immediate_context,
         Microsoft::WRL::ComPtr<ID3D11DeviceContext> deferred_context, Microsoft::WRL::ComPtr<IDXGISwapChain> swapchain,
-        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> swapchain_render_target_view, D3D_FEATURE_LEVEL feature_level
+        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> swapchain_render_target_view, D3D_FEATURE_LEVEL feature_level,
+        u32 width, u32 height
     )
         : app_(app),
           device_(std::move(device)),
@@ -38,8 +41,27 @@ export namespace engine
           deferred_context_(std::move(deferred_context)),
           swapchain_(std::move(swapchain)),
           swapchain_render_target_view_(std::move(swapchain_render_target_view)),
-          feature_level_(feature_level)
+          feature_level_(feature_level),
+          width_(width),
+          height_(height)
     {
+      // TODO: make configurable with SamplerDescription
+      D3D11_SAMPLER_DESC sampler_info{
+          .Filter         = D3D11_FILTER_MIN_MAG_MIP_POINT,
+          .AddressU       = D3D11_TEXTURE_ADDRESS_CLAMP,
+          .AddressV       = D3D11_TEXTURE_ADDRESS_CLAMP,
+          .AddressW       = D3D11_TEXTURE_ADDRESS_CLAMP,
+          .MipLODBias     = 0.0F,
+          .MaxAnisotropy  = 1,
+          .ComparisonFunc = D3D11_COMPARISON_ALWAYS,
+          .BorderColor    = {0.0F, 0.0F, 0.0F, 0.0F},
+          .MinLOD         = 0.0F,
+          .MaxLOD         = D3D11_FLOAT32_MAX,
+      };
+      if (auto result = device_->CreateSamplerState(&sampler_info, &sampler_); FAILED(result))
+      {
+        app_.report(Severity::Fatal, "CreateSamplerState failed: {}", result);
+      }
     }
 
     auto create_buffer(BufferDescription description) -> BufferHandle;
@@ -50,6 +72,8 @@ export namespace engine
     auto destroy_shader(ShaderHandle handle) -> void;
     auto create_pipeline(PipelineDescription description) -> PipelineHandle;
     auto destroy_pipeline(PipelineHandle handle) -> void;
+
+    auto resize(u32 width, u32 height) -> void;
 
     auto begin_frame() -> FrameID;
     auto swapchain_texture(FrameID frame) -> TextureHandle;
@@ -62,6 +86,7 @@ export namespace engine
     auto begin_pass(FrameID frame, RenderPassDescription description) -> PassID;
     auto bind_pipeline(PassID pass, PipelineHandle pipeline) -> void;
     auto bind_buffer(PassID pass, BufferHandle buffer, u32 slot) -> void;
+    auto bind_texture(PassID pass, ShaderStage stage, u32 slot, TextureHandle texture) -> void;
     auto push_uniforms(PassID pass, ShaderStage stage, u32 slot, std::span<const std::byte> bytes) -> void;
     auto draw(PassID pass, u32 vertex_count, u32 instance_count, u32 first_vertex) -> void;
     auto draw_indexed(PassID pass, u32 index_count, u32 instance_count, u32 first_index) -> void;
@@ -71,6 +96,7 @@ export namespace engine
   private:
     [[nodiscard]] auto resolve_color_target(TextureHandle handle) -> ID3D11RenderTargetView*;
     [[nodiscard]] auto resolve_depth_target(TextureHandle handle) -> ID3D11DepthStencilView*;
+    [[nodiscard]] auto resolve_shader_resource(TextureHandle handle) -> ID3D11ShaderResourceView*;
 
     App& app_;
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
@@ -79,21 +105,21 @@ export namespace engine
     Microsoft::WRL::ComPtr<IDXGISwapChain> swapchain_;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> swapchain_render_target_view_;
     D3D_FEATURE_LEVEL feature_level_;
+    u32 width_; // current swapchain size, tracked so resize() is a no-op when the size hasn't actually changed
+    u32 height_;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler_; // one default sampler, see the constructor
 
     HandleTable<BufferRecord> buffers_;
     HandleTable<TextureRecord> textures_;
     HandleTable<ShaderRecord> shaders_;
     HandleTable<PipelineRecord> pipelines_;
 
-    // The deferred context just accumulates state between
-    // begin_frame and submit. These tokens exist purely as call-order /
-    // stale-ID guards for the contract, not to gate a real GPU resource.
-    u64 frame_token_         = 0;
-    bool frame_open_         = false;
-    u64 copy_pass_token_     = 0;
-    bool copy_pass_open_     = false;
-    u64 pass_token_          = 0;
-    bool pass_open_          = false;
+    // The deferred context just accumulates state between begin_frame and
+    // submit. These guards exist purely as call-order / stale-ID checks for
+    // the contract, not to gate a real GPU resource.
+    TokenGuard<FrameID> frame_guard_;
+    TokenGuard<CopyPassID> copy_pass_guard_;
+    TokenGuard<PassID> pass_guard_;
     u32 bound_vertex_stride_ = 0; // from bind_pipeline; IASetVertexBuffers needs a stride at bind_buffer time
 
     static constexpr u32 CONSTANT_BUFFER_SLOT_COUNT = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
@@ -218,12 +244,13 @@ namespace engine
     }
 
     TextureRecord record{
-        .handle             = texture,
-        .render_target_view = nullptr,
-        .depth_stencil_view = nullptr,
-        .width              = description.width,
-        .height             = description.height,
-        .format             = description.format
+        .handle               = texture,
+        .render_target_view   = nullptr,
+        .depth_stencil_view   = nullptr,
+        .shader_resource_view = nullptr,
+        .width                = description.width,
+        .height               = description.height,
+        .format               = description.format
     };
 
     if ((bind_flags & D3D11_BIND_RENDER_TARGET) != 0U)
@@ -241,6 +268,15 @@ namespace engine
           FAILED(result))
       {
         app_.report(Severity::Error, "CreateDepthStencilView failed: {}", result);
+        return TextureHandle::Invalid;
+      }
+    }
+    if ((bind_flags & D3D11_BIND_SHADER_RESOURCE) != 0U)
+    {
+      if (auto result = device_->CreateShaderResourceView(texture.Get(), nullptr, &record.shader_resource_view);
+          FAILED(result))
+      {
+        app_.report(Severity::Error, "CreateShaderResourceView failed: {}", result);
         return TextureHandle::Invalid;
       }
     }
@@ -489,18 +525,51 @@ namespace engine
     return (record != nullptr) ? record->depth_stencil_view.Get() : nullptr;
   }
 
-  auto DX11Renderer::begin_frame() -> FrameID
+  auto DX11Renderer::resolve_shader_resource(TextureHandle handle) -> ID3D11ShaderResourceView*
   {
-    ++frame_token_;
-    frame_open_ = true;
-    return static_cast<FrameID>(frame_token_);
+    auto* record = textures_.get(static_cast<u64>(handle));
+    return (record != nullptr) ? record->shader_resource_view.Get() : nullptr;
   }
+
+  auto DX11Renderer::resize(u32 width, u32 height) -> void
+  {
+    if (width == 0 || height == 0 || (width == width_ && height == height_))
+    {
+      // 0x0 happens while the window is minimized so keep the existing buffers until it's restored.
+      return;
+    }
+
+    swapchain_render_target_view_.Reset(); // every reference to the backbuffer must drop before ResizeBuffers
+
+    if (auto result = swapchain_->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0); FAILED(result))
+    {
+      app_.report(Severity::Error, "ResizeBuffers failed: {}", result);
+      return;
+    }
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> backbuffer;
+    if (auto result = swapchain_->GetBuffer(0, IID_PPV_ARGS(&backbuffer)); FAILED(result))
+    {
+      app_.report(Severity::Error, "retrieving resized swapchain buffer failed: {}", result);
+      return;
+    }
+    if (auto result = device_->CreateRenderTargetView(backbuffer.Get(), nullptr, &swapchain_render_target_view_);
+        FAILED(result))
+    {
+      app_.report(Severity::Error, "creating resized render target view failed: {}", result);
+      return;
+    }
+
+    width_  = width;
+    height_ = height;
+  }
+
+  auto DX11Renderer::begin_frame() -> FrameID { return frame_guard_.begin(); }
 
   auto DX11Renderer::swapchain_texture(FrameID frame) -> TextureHandle
   {
-    if (frame == FrameID::Invalid || static_cast<u64>(frame) != frame_token_ || !frame_open_)
+    if (!frame_guard_.check(frame, app_, "frame"))
     {
-      app_.report(Severity::Error, "frame id does not match the current frame");
       return TextureHandle::Invalid;
     }
     return static_cast<TextureHandle>(SWAPCHAIN_TEXTURE_HANDLE);
@@ -508,21 +577,17 @@ namespace engine
 
   auto DX11Renderer::begin_copy_pass(FrameID frame) -> CopyPassID
   {
-    if (frame == FrameID::Invalid || static_cast<u64>(frame) != frame_token_ || !frame_open_)
+    if (!frame_guard_.check(frame, app_, "frame"))
     {
-      app_.report(Severity::Error, "frame id does not match the current frame");
       return CopyPassID::Invalid;
     }
-    ++copy_pass_token_;
-    copy_pass_open_ = true;
-    return static_cast<CopyPassID>(copy_pass_token_);
+    return copy_pass_guard_.begin();
   }
 
   auto DX11Renderer::upload_buffer(CopyPassID pass, BufferHandle buffer, std::span<const std::byte> bytes) -> void
   {
-    if (pass == CopyPassID::Invalid || static_cast<u64>(pass) != copy_pass_token_ || !copy_pass_open_)
+    if (!copy_pass_guard_.check(pass, app_, "copy pass"))
     {
-      app_.report(Severity::Error, "copy pass id does not match the current copy pass");
       return;
     }
     const u64 id = std::visit([](auto b) -> auto { return static_cast<u64>(b); }, buffer);
@@ -544,9 +609,8 @@ namespace engine
       CopyPassID pass, TextureHandle texture, std::span<const std::byte> bytes, u32 bytes_per_row
   ) -> void
   {
-    if (pass == CopyPassID::Invalid || static_cast<u64>(pass) != copy_pass_token_ || !copy_pass_open_)
+    if (!copy_pass_guard_.check(pass, app_, "copy pass"))
     {
-      app_.report(Severity::Error, "copy pass id does not match the current copy pass");
       return;
     }
     if (static_cast<u64>(texture) == SWAPCHAIN_TEXTURE_HANDLE)
@@ -565,19 +629,17 @@ namespace engine
 
   auto DX11Renderer::end_copy_pass(CopyPassID pass) -> void
   {
-    if (pass == CopyPassID::Invalid || static_cast<u64>(pass) != copy_pass_token_ || !copy_pass_open_)
+    if (!copy_pass_guard_.check(pass, app_, "copy pass"))
     {
-      app_.report(Severity::Error, "copy pass id does not match the current copy pass");
       return;
     }
-    copy_pass_open_ = false;
+    copy_pass_guard_.end();
   }
 
   auto DX11Renderer::begin_pass(FrameID frame, RenderPassDescription description) -> PassID
   {
-    if (frame == FrameID::Invalid || static_cast<u64>(frame) != frame_token_ || !frame_open_)
+    if (!frame_guard_.check(frame, app_, "frame"))
     {
-      app_.report(Severity::Error, "frame id does not match the current frame");
       return PassID::Invalid;
     }
 
@@ -644,16 +706,13 @@ namespace engine
       }
     }
 
-    ++pass_token_;
-    pass_open_ = true;
-    return static_cast<PassID>(pass_token_);
+    return pass_guard_.begin();
   }
 
   auto DX11Renderer::bind_pipeline(PassID pass, PipelineHandle pipeline) -> void
   {
-    if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || !pass_open_)
+    if (!pass_guard_.check(pass, app_, "pass"))
     {
-      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     auto* record = pipelines_.get(static_cast<u64>(pipeline));
@@ -675,9 +734,8 @@ namespace engine
 
   auto DX11Renderer::bind_buffer(PassID pass, BufferHandle buffer, u32 slot) -> void
   {
-    if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || !pass_open_)
+    if (!pass_guard_.check(pass, app_, "pass"))
     {
-      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     const u64 id = std::visit([](auto b) -> auto { return static_cast<u64>(b); }, buffer);
@@ -705,11 +763,37 @@ namespace engine
     }
   }
 
+  auto DX11Renderer::bind_texture(PassID pass, ShaderStage stage, u32 slot, TextureHandle texture) -> void
+  {
+    if (!pass_guard_.check(pass, app_, "pass"))
+    {
+      return;
+    }
+    auto* srv = resolve_shader_resource(texture);
+    if (srv == nullptr)
+    {
+      app_.report(Severity::Error, "invalid or already-destroyed texture handle");
+      return;
+    }
+
+    ID3D11ShaderResourceView* raw_srv = srv;
+    ID3D11SamplerState* raw_sampler   = sampler_.Get();
+    if (stage == ShaderStage::Vertex)
+    {
+      deferred_context_->VSSetShaderResources(slot, 1, &raw_srv);
+      deferred_context_->VSSetSamplers(slot, 1, &raw_sampler);
+    }
+    else
+    {
+      deferred_context_->PSSetShaderResources(slot, 1, &raw_srv);
+      deferred_context_->PSSetSamplers(slot, 1, &raw_sampler);
+    }
+  }
+
   auto DX11Renderer::push_uniforms(PassID pass, ShaderStage stage, u32 slot, std::span<const std::byte> bytes) -> void
   {
-    if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || !pass_open_)
+    if (!pass_guard_.check(pass, app_, "pass"))
     {
-      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     if (slot >= CONSTANT_BUFFER_SLOT_COUNT)
@@ -765,9 +849,8 @@ namespace engine
 
   auto DX11Renderer::draw(PassID pass, u32 vertex_count, u32 instance_count, u32 first_vertex) -> void
   {
-    if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || !pass_open_)
+    if (!pass_guard_.check(pass, app_, "pass"))
     {
-      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     deferred_context_->DrawInstanced(vertex_count, instance_count, first_vertex, 0);
@@ -775,9 +858,8 @@ namespace engine
 
   auto DX11Renderer::draw_indexed(PassID pass, u32 index_count, u32 instance_count, u32 first_index) -> void
   {
-    if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || !pass_open_)
+    if (!pass_guard_.check(pass, app_, "pass"))
     {
-      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
     deferred_context_->DrawIndexedInstanced(index_count, instance_count, first_index, 0, 0);
@@ -785,33 +867,31 @@ namespace engine
 
   auto DX11Renderer::end_pass(PassID pass) -> void
   {
-    if (pass == PassID::Invalid || static_cast<u64>(pass) != pass_token_ || !pass_open_)
+    if (!pass_guard_.check(pass, app_, "pass"))
     {
-      app_.report(Severity::Error, "pass id does not match the current pass");
       return;
     }
-    pass_open_ = false;
+    pass_guard_.end();
   }
 
   auto DX11Renderer::submit(FrameID frame) -> void
   {
-    if (frame == FrameID::Invalid || static_cast<u64>(frame) != frame_token_ || !frame_open_)
+    if (!frame_guard_.check(frame, app_, "frame"))
     {
-      app_.report(Severity::Error, "frame id does not match the current frame");
       return;
     }
-    if (pass_open_ || copy_pass_open_)
+    if (pass_guard_.is_open() || copy_pass_guard_.is_open())
     {
       app_.report(Severity::Error, "called with a pass still open; call end_pass/end_copy_pass first");
-      pass_open_      = false;
-      copy_pass_open_ = false;
+      pass_guard_.end();
+      copy_pass_guard_.end();
     }
 
     Microsoft::WRL::ComPtr<ID3D11CommandList> command_list;
     if (auto result = deferred_context_->FinishCommandList(0, &command_list); FAILED(result))
     {
       app_.report(Severity::Error, "FinishCommandList failed: {}", result);
-      frame_open_ = false;
+      frame_guard_.end();
       return;
     }
     immediate_context_->ExecuteCommandList(command_list.Get(), 0);
@@ -826,7 +906,7 @@ namespace engine
       app_.report(Severity::Error, "Present failed: {}", result);
     }
 
-    frame_open_ = false;
+    frame_guard_.end();
   }
 
 } // namespace engine
