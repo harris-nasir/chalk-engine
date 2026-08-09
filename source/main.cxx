@@ -11,7 +11,7 @@ struct Vertex
   f32 u, v;
 };
 
-struct State
+struct SharedAssets
 {
   PipelineHandle pipeline;
   BufferHandle vbo;
@@ -19,7 +19,6 @@ struct State
   TextureHandle texture;
 };
 
-// Names for the keys the demo listens to, for readable input logs.
 auto key_name(Key key) -> char const*
 {
   switch (key)
@@ -49,9 +48,6 @@ auto key_name(Key key) -> char const*
   }
 }
 
-// Registers a PreUpdate system that logs key presses/releases and mouse
-// clicks so the active input backend can be verified by hand. No-op when
-// no input backend inserted an InputState resource.
 auto add_input_test(App& app) -> void
 {
   app.add_system(
@@ -103,8 +99,6 @@ auto add_input_test(App& app) -> void
           app.report(Severity::Info, "input: middle click at ({}, {})", input.mouse_x(), input.mouse_y());
         }
 
-        // ~1 Hz summary of held keys and mouse motion so level state
-        // (is_pressed) and deltas are visible without spamming every frame
         const auto& time = app.require_resource<Time>();
         if (time.elapsed_seconds - last_summary >= 1.0)
         {
@@ -230,13 +224,38 @@ public:
           renderer.end_copy_pass(copy);
           renderer.submit(upload_frame);
 
-          app.insert_resource<State>(State{.pipeline = pipeline, .vbo = vbo, .ibo = ibo, .texture = texture});
+          app.insert_resource<SharedAssets>(
+              SharedAssets{.pipeline = pipeline, .vbo = vbo, .ibo = ibo, .texture = texture}
+          );
+
+          auto& world = app.require_resource<World>();
+
+          constexpr std::array<f32, 3> offsets{-0.6F, 0.0F, 0.6F};
+          for (f32 offset : offsets)
+          {
+            EntityID entity = world.spawn();
+            world.add<Transform>(entity, {.x = offset, .scale_x = 0.4F, .scale_y = 0.4F});
+            world.add<Renderable>(
+                entity, {.pipeline = pipeline, .vbo = vbo, .ibo = ibo, .index_count = 6, .texture = texture}
+            );
+          }
         }
     );
 
-    // Input sanity check: log key presses/releases and mouse clicks so the
-    // active input backend can be verified by hand. No-op without one.
     add_input_test(app);
+
+    app.add_system(
+        Schedule::Update,
+        [](App& app) -> void
+        {
+          const auto& time = app.require_resource<Time>();
+          auto& world      = app.require_resource<World>();
+          for (auto& [id, transform] : world.view<Transform>())
+          {
+            transform.rotation += static_cast<f32>(time.delta_seconds) * 1.5F;
+          }
+        }
+    );
 
     app.add_system(
         Schedule::Render,
@@ -258,40 +277,44 @@ public:
 
             PassID pass = renderer.begin_pass(frame, RenderPassDescription{.color_attachments = color_attachments});
 
-            auto& demo = app.require_resource<State>();
-            renderer.bind_pipeline(pass, demo.pipeline);
-            renderer.bind_buffer(pass, demo.vbo, 0);
-            renderer.bind_buffer(pass, demo.ibo, 0);
-            renderer.bind_texture(pass, ShaderStage::Fragment, 0, demo.texture);
+            auto& world = app.require_resource<World>();
 
-            const auto& time = app.require_resource<Time>();
-            const auto angle = static_cast<f32>(time.elapsed_seconds);
-            const f32 cos_a  = std::cos(angle);
-            const f32 sin_a  = std::sin(angle);
+            for (const auto& [id, transform, renderable] : world.view<Transform, Renderable>())
+            {
+              renderer.bind_pipeline(pass, renderable.pipeline);
+              renderer.bind_buffer(pass, renderable.vbo, 0);
+              renderer.bind_buffer(pass, renderable.ibo, 0);
+              renderer.bind_texture(pass, ShaderStage::Fragment, 0, renderable.texture);
 
-            // row_major. each row here is one row of the matrix
-            // so no transpose bookkeeping needed.
-            const std::array<f32, 16> transform{
-                cos_a,
-                -sin_a,
-                0.0F,
-                0.0F, //
-                sin_a,
-                cos_a,
-                0.0F,
-                0.0F, //
-                0.0F,
-                0.0F,
-                1.0F,
-                0.0F, //
-                0.0F,
-                0.0F,
-                0.0F,
-                1.0F, //
-            };
-            renderer.push_uniforms(pass, ShaderStage::Vertex, 0, std::as_bytes(std::span{transform}));
+              const f32 cos_a = std::cos(transform.rotation);
+              const f32 sin_a = std::sin(transform.rotation);
 
-            renderer.draw_indexed(pass, 6, 1, 0);
+              // row_major. each row here is one row of the matrix.
+              // mul(transform, vec4) treats the vector as a column, so
+              // translation lives in the last column of each row, not
+              // the last row.
+              const std::array<f32, 16> matrix{
+                  cos_a * transform.scale_x,
+                  -sin_a * transform.scale_y,
+                  0.0F,
+                  transform.x, //
+                  sin_a * transform.scale_x,
+                  cos_a * transform.scale_y,
+                  0.0F,
+                  transform.y, //
+                  0.0F,
+                  0.0F,
+                  1.0F,
+                  transform.z, //
+                  0.0F,
+                  0.0F,
+                  0.0F,
+                  1.0F, //
+              };
+              renderer.push_uniforms(pass, ShaderStage::Vertex, 0, std::as_bytes(std::span{matrix}));
+
+              renderer.draw_indexed(pass, renderable.index_count, 1, 0);
+            }
 
             renderer.end_pass(pass);
           }
@@ -305,11 +328,11 @@ public:
         [](App& app) -> void
         {
           auto& renderer = app.require_resource<Renderer>();
-          auto& demo     = app.require_resource<State>();
-          renderer.destroy_pipeline(demo.pipeline);
-          renderer.destroy_buffer(demo.vbo);
-          renderer.destroy_buffer(demo.ibo);
-          renderer.destroy_texture(demo.texture);
+          auto& assets   = app.require_resource<SharedAssets>();
+          renderer.destroy_pipeline(assets.pipeline);
+          renderer.destroy_buffer(assets.vbo);
+          renderer.destroy_buffer(assets.ibo);
+          renderer.destroy_texture(assets.texture);
         }
     );
   }
