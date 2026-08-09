@@ -2,6 +2,7 @@ module;
 
 #include <SDL3/SDL.h>
 #include <cstddef>
+#include <span>
 #include <windows.h>
 
 export module engine.input.sdl3;
@@ -244,8 +245,8 @@ namespace engine
   {
     for (auto i = static_cast<std::size_t>(1); i < static_cast<std::size_t>(Key::Count); ++i)
     {
-      auto key          = static_cast<Key>(i);
-      state.key_down[i] = is_key_down(key);
+      auto key             = static_cast<Key>(i);
+      state.key_down.at(i) = is_key_down(key);
     }
   }
 
@@ -288,11 +289,13 @@ namespace engine
             SDL_PumpEvents();
 
             poll_all_keys(
-                state, [keys = SDL_GetKeyboardState(nullptr)](Key key) -> bool { return keys[to_sdl_scancode(key)]; }
+                state,
+                [keys = std::span{SDL_GetKeyboardState(nullptr), SDL_SCANCODE_COUNT}](Key key) -> bool
+                { return keys[static_cast<std::size_t>(to_sdl_scancode(key))] != 0; }
             );
 
-            float mouse_x = 0.0f;
-            float mouse_y = 0.0f;
+            float mouse_x = 0.0F;
+            float mouse_y = 0.0F;
             auto buttons  = SDL_GetMouseState(&mouse_x, &mouse_y);
 
             state.mouse_down[static_cast<std::size_t>(MouseButton::Left)]   = (buttons & SDL_BUTTON_LMASK) != 0;
