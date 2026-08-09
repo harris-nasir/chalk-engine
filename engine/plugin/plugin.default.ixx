@@ -29,8 +29,8 @@ import engine.renderer.dx11;
 import engine.audio.xaudio2;
 #endif
 
-#if defined(CHALK_INPUT_XINPUT)
-import engine.input.xinput;
+#if defined(CHALK_INPUT_SDL3)
+import engine.input.sdl3;
 #endif
 
 #if defined(CHALK_PHYSICS_SIMPLE)
@@ -87,8 +87,8 @@ namespace engine
     app.add_plugin<AudioXAudio2Plugin>();
 #endif
 
-#if defined(CHALK_INPUT_XINPUT)
-    app.add_plugin<InputXInputPlugin>();
+#if defined(CHALK_INPUT_SDL3)
+    app.add_plugin<InputSDL3Plugin>();
 #endif
 
 #if defined(CHALK_PHYSICS_SIMPLE)
