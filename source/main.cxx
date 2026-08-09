@@ -1,5 +1,4 @@
 #include <array>
-#include <cmath>
 #include <span>
 
 import engine;
@@ -234,7 +233,7 @@ public:
           for (f32 offset : offsets)
           {
             EntityID entity = world.spawn();
-            world.add<Transform>(entity, {.x = offset, .scale_x = 0.4F, .scale_y = 0.4F});
+            world.add<Transform>(entity, {.position = Vector3{.x = offset}, .scale = Vector2{0.8F, 0.8F}});
             world.add<Renderable>(
                 entity, {.pipeline = pipeline, .vbo = vbo, .ibo = ibo, .index_count = 6, .texture = texture}
             );
@@ -286,32 +285,9 @@ public:
               renderer.bind_buffer(pass, renderable.ibo, 0);
               renderer.bind_texture(pass, ShaderStage::Fragment, 0, renderable.texture);
 
-              const f32 cos_a = std::cos(transform.rotation);
-              const f32 sin_a = std::sin(transform.rotation);
-
-              // row_major. each row here is one row of the matrix.
-              // mul(transform, vec4) treats the vector as a column, so
-              // translation lives in the last column of each row, not
-              // the last row.
-              const std::array<f32, 16> matrix{
-                  cos_a * transform.scale_x,
-                  -sin_a * transform.scale_y,
-                  0.0F,
-                  transform.x, //
-                  sin_a * transform.scale_x,
-                  cos_a * transform.scale_y,
-                  0.0F,
-                  transform.y, //
-                  0.0F,
-                  0.0F,
-                  1.0F,
-                  transform.z, //
-                  0.0F,
-                  0.0F,
-                  0.0F,
-                  1.0F, //
-              };
-              renderer.push_uniforms(pass, ShaderStage::Vertex, 0, std::as_bytes(std::span{matrix}));
+              Matrix4 matrix = Matrix4::translation(transform.position) * Matrix4::rotation_z(transform.rotation)
+                               * Matrix4::scale(transform.scale);
+              renderer.push_uniforms(pass, ShaderStage::Vertex, 0, std::as_bytes(std::span{matrix.values}));
 
               renderer.draw_indexed(pass, renderable.index_count, 1, 0);
             }
