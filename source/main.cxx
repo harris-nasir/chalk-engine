@@ -27,16 +27,17 @@ public:
         {
           auto& renderer = app.require_resource<Renderer>();
 
-          auto vertex_code   = read_file_as_bytes("shaders/position.vertex.spv");
-          auto fragment_code = read_file_as_bytes("shaders/gradient.fragment.spv");
+          auto vertex_source   = load_shader("position.vertex");
+          auto fragment_source = load_shader("gradient.fragment");
 
           ShaderDescription description{};
-          description.format  = ShaderFormat::SPIRV;
-          description.code    = vertex_code;
+          description.format  = vertex_source.format;
+          description.code    = vertex_source.code;
           description.stage   = ShaderStage::Vertex;
           ShaderHandle vertex = renderer.create_shader(description);
 
-          description.code      = fragment_code;
+          description.format    = fragment_source.format;
+          description.code      = fragment_source.code;
           description.stage     = ShaderStage::Fragment;
           ShaderHandle fragment = renderer.create_shader(description);
 
