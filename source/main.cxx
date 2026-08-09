@@ -19,6 +19,118 @@ struct State
   TextureHandle texture;
 };
 
+// Names for the keys the demo listens to, for readable input logs.
+auto key_name(Key key) -> char const*
+{
+  switch (key)
+  {
+    case Key::W:
+      return "W";
+    case Key::A:
+      return "A";
+    case Key::S:
+      return "S";
+    case Key::D:
+      return "D";
+    case Key::Space:
+      return "Space";
+    case Key::Escape:
+      return "Escape";
+    case Key::Up:
+      return "Up";
+    case Key::Down:
+      return "Down";
+    case Key::Left:
+      return "Left";
+    case Key::Right:
+      return "Right";
+    default:
+      return "?";
+  }
+}
+
+// Registers a PreUpdate system that logs key presses/releases and mouse
+// clicks so the active input backend can be verified by hand. No-op when
+// no input backend inserted an InputState resource.
+auto add_input_test(App& app) -> void
+{
+  app.add_system(
+      Schedule::PreUpdate,
+      [last_summary = 0.0](App& app) mutable -> void
+      {
+        if (!app.has_resource<InputState>())
+        {
+          return;
+        }
+
+        constexpr std::array test_keys{
+            Key::W,
+            Key::A,
+            Key::S,
+            Key::D,
+            Key::Space,
+            Key::Escape,
+            Key::Up,
+            Key::Down,
+            Key::Left,
+            Key::Right,
+        };
+
+        auto& input = app.require_resource<InputState>();
+
+        for (Key key : test_keys)
+        {
+          if (input.just_pressed(key))
+          {
+            app.report(Severity::Info, "input: {} just pressed", key_name(key));
+          }
+          if (input.just_released(key))
+          {
+            app.report(Severity::Info, "input: {} just released", key_name(key));
+          }
+        }
+
+        if (input.just_pressed(MouseButton::Left))
+        {
+          app.report(Severity::Info, "input: left click at ({}, {})", input.mouse_x(), input.mouse_y());
+        }
+        if (input.just_pressed(MouseButton::Right))
+        {
+          app.report(Severity::Info, "input: right click at ({}, {})", input.mouse_x(), input.mouse_y());
+        }
+        if (input.just_pressed(MouseButton::Middle))
+        {
+          app.report(Severity::Info, "input: middle click at ({}, {})", input.mouse_x(), input.mouse_y());
+        }
+
+        // ~1 Hz summary of held keys and mouse motion so level state
+        // (is_pressed) and deltas are visible without spamming every frame
+        const auto& time = app.require_resource<Time>();
+        if (time.elapsed_seconds - last_summary >= 1.0)
+        {
+          last_summary = time.elapsed_seconds;
+
+          for (Key key : test_keys)
+          {
+            if (input.is_pressed(key))
+            {
+              app.report(Severity::Info, "input: {} held", key_name(key));
+            }
+          }
+
+          app.report(
+              Severity::Info,
+              "input: mouse at ({}, {}) delta ({}, {})",
+              input.mouse_x(),
+              input.mouse_y(),
+              input.mouse_delta_x(),
+              input.mouse_delta_y()
+          );
+        }
+      }
+  );
+}
+
 class GamePlugin
 {
 public:
@@ -30,8 +142,8 @@ public:
         {
           auto& renderer = app.require_resource<Renderer>();
 
-          auto vertex_source   = load_shader("textured.vertex");
-          auto fragment_source = load_shader("textured.fragment");
+          Shader vertex_source   = load_shader("textured.vertex");
+          Shader fragment_source = load_shader("textured.fragment");
 
           ShaderDescription vertex_description{
               .code      = vertex_source.code,
@@ -121,6 +233,10 @@ public:
           app.insert_resource<State>(State{.pipeline = pipeline, .vbo = vbo, .ibo = ibo, .texture = texture});
         }
     );
+
+    // Input sanity check: log key presses/releases and mouse clicks so the
+    // active input backend can be verified by hand. No-op without one.
+    add_input_test(app);
 
     app.add_system(
         Schedule::Render,

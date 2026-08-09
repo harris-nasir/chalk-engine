@@ -14,9 +14,6 @@ import engine.platform;
 namespace engine
 {
 
-  // SDL_Scancode is layout-independent (physical key position), matching
-  // how Key is meant to be interpreted - same physical mapping as the
-  // Win32 VK_* fallback below.
   [[nodiscard]] auto to_sdl_scancode(Key key) -> SDL_Scancode
   {
     switch (key)
@@ -128,8 +125,6 @@ namespace engine
     }
   }
 
-  // Win32 virtual-key fallback, used only when no SDL_Window resource
-  // exists (CHALK_PLATFORM=WIN32 with CHALK_INPUT=SDL3).
   [[nodiscard]] auto to_virtual_key(Key key) -> int
   {
     switch (key)
@@ -245,7 +240,7 @@ namespace engine
   {
     for (auto i = static_cast<std::size_t>(1); i < static_cast<std::size_t>(Key::Count); ++i)
     {
-      auto key           = static_cast<Key>(i);
+      auto key = static_cast<Key>(i);
       state.set_key_down(key, is_key_down(key));
     }
   }
@@ -270,10 +265,6 @@ namespace engine
   {
     app.insert_resource<InputState>({});
 
-    // Decided once: platform.sdl3 (if active) has already inserted
-    // SDL_Window* synchronously during its own build(), which runs before
-    // this one (platform is added before input in plugin.default.ixx). No
-    // per-frame branching needed.
     if (app.has_resource<SDL_Window*>())
     {
       app.report(Severity::Info, "input: sdl3 backend using SDL window state");
@@ -308,17 +299,14 @@ namespace engine
       return;
     }
 
-    // Mandatory native fallback: no SDL window, so no SDL event pump
-    // either. Same Win32-only restriction as renderer.sdl3.ixx's own
-    // NativeWindowHandle fallback (X11/Wayland are not implemented yet).
-    auto& native = app.require_resource<NativeWindowHandle>();
-    if (native.kind != NativeWindowKind::Win32)
+    auto& native_window_handle = app.require_resource<NativeWindowHandle>();
+    if (native_window_handle.kind != NativeWindowKind::Win32)
     {
       app.report(Severity::Fatal, "input: sdl3 backend has no native fallback for this platform");
     }
 
     app.report(Severity::Info, "input: sdl3 backend using native win32 state");
-    HWND window = static_cast<HWND>(native.handle);
+    HWND window = static_cast<HWND>(native_window_handle.handle);
 
     app.add_system(
         Schedule::PreUpdate,

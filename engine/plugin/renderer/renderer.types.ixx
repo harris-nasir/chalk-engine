@@ -4,6 +4,7 @@ module;
 #include <cstddef>
 #include <span>
 #include <variant>
+#include <vector>
 
 export module engine.renderer.types;
 
@@ -162,6 +163,12 @@ export namespace engine
     ShaderFormat format;
     const char* entry_point = "main";
     ShaderResourceCounts resources;
+  };
+
+  struct Shader
+  {
+    std::vector<u8> code;
+    ShaderFormat format;
   };
 
   struct PipelineDescription

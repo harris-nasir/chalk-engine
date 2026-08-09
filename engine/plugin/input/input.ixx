@@ -125,8 +125,7 @@ export namespace engine
 
     void set_mouse_button(MouseButton button, bool down) { mouse_down_.at(static_cast<std::size_t>(button)) = down; }
 
-    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-    void set_mouse_position(f32 x, f32 y)
+    void set_mouse_position(f32 x, f32 y) // NOLINT(bugprone-easily-swappable-parameters)
     {
       mouse_delta_x_ = x - mouse_x_;
       mouse_delta_y_ = y - mouse_y_;
