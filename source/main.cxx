@@ -1,4 +1,5 @@
 #include <array>
+#include <cmath>
 #include <span>
 
 import engine;
@@ -7,13 +8,15 @@ using namespace engine;
 struct Vertex
 {
   f32 x, y, z;
-  f32 r, g, b;
+  f32 u, v;
 };
 
 struct State
 {
   PipelineHandle pipeline;
   BufferHandle vbo;
+  BufferHandle ibo;
+  TextureHandle texture;
 };
 
 class GamePlugin
@@ -27,23 +30,28 @@ public:
         {
           auto& renderer = app.require_resource<Renderer>();
 
-          auto vertex_source   = load_shader("position.vertex");
-          auto fragment_source = load_shader("gradient.fragment");
+          auto vertex_source   = load_shader("textured.vertex");
+          auto fragment_source = load_shader("textured.fragment");
 
-          ShaderDescription description{};
-          description.format  = vertex_source.format;
-          description.code    = vertex_source.code;
-          description.stage   = ShaderStage::Vertex;
-          ShaderHandle vertex = renderer.create_shader(description);
+          ShaderDescription vertex_description{
+              .code      = vertex_source.code,
+              .stage     = ShaderStage::Vertex,
+              .format    = vertex_source.format,
+              .resources = ShaderResourceCounts{.uniform_buffers = 1},
+          };
+          ShaderHandle vertex = renderer.create_shader(vertex_description);
 
-          description.format    = fragment_source.format;
-          description.code      = fragment_source.code;
-          description.stage     = ShaderStage::Fragment;
-          ShaderHandle fragment = renderer.create_shader(description);
+          ShaderDescription fragment_description{
+              .code      = fragment_source.code,
+              .stage     = ShaderStage::Fragment,
+              .format    = fragment_source.format,
+              .resources = ShaderResourceCounts{.samplers = 1},
+          };
+          ShaderHandle fragment = renderer.create_shader(fragment_description);
 
           std::array attributes{
               VertexAttribute{.location = 0, .offset = 0 * sizeof(f32), .format = VertexFormat::F32x3},
-              VertexAttribute{.location = 1, .offset = 3 * sizeof(f32), .format = VertexFormat::F32x3},
+              VertexAttribute{.location = 1, .offset = 3 * sizeof(f32), .format = VertexFormat::F32x2},
           };
 
           PipelineHandle pipeline = renderer.create_pipeline(
@@ -61,28 +69,56 @@ public:
           renderer.destroy_shader(vertex);
           renderer.destroy_shader(fragment);
 
-          constexpr std::array<Vertex, 3> triangle{{
-              {.x = -0.5F, .y = -0.5F, .z = 0.0F, .r = 1.0F, .g = 0.0F, .b = 0.0F},
-              {.x = 0.5F, .y = -0.5F, .z = 0.0F, .r = 0.0F, .g = 1.0F, .b = 0.0F},
-              {.x = 0.0F, .y = 0.5F, .z = 0.0F, .r = 0.0F, .g = 0.0F, .b = 1.0F},
+          constexpr std::array<Vertex, 4> quad{{
+              {.x = -0.5F, .y = -0.5F, .z = 0.0F, .u = 0.0F, .v = 1.0F},
+              {.x = 0.5F, .y = -0.5F, .z = 0.0F, .u = 1.0F, .v = 1.0F},
+              {.x = 0.5F, .y = 0.5F, .z = 0.0F, .u = 1.0F, .v = 0.0F},
+              {.x = -0.5F, .y = 0.5F, .z = 0.0F, .u = 0.0F, .v = 0.0F},
           }};
+          constexpr std::array<u32, 6> indices{0, 1, 2, 2, 3, 0};
 
-          BufferHandle vbo = renderer.create_buffer(
-              BufferDescription{
-                  .size  = sizeof(triangle),
-                  .usage = BufferUsage::Vertex,
+          BufferHandle vbo
+              = renderer.create_buffer(BufferDescription{.size = sizeof(quad), .usage = BufferUsage::Vertex});
+          BufferHandle ibo
+              = renderer.create_buffer(BufferDescription{.size = sizeof(indices), .usage = BufferUsage::Index});
+
+          // Tiny checkerboard pattern
+          constexpr u32 checker_size = 4;
+          std::array<u8, checker_size * checker_size * 4> pixels{};
+          for (u32 y = 0; y < checker_size; ++y)
+          {
+            for (u32 x = 0; x < checker_size; ++x)
+            {
+              const bool is_light = ((x + y) % 2) == 0;
+              const u8 value      = is_light ? 255 : 32;
+              const u32 offset    = (y * checker_size + x) * 4;
+              pixels[offset + 0]  = value;
+              pixels[offset + 1]  = value;
+              pixels[offset + 2]  = value;
+              pixels[offset + 3]  = 255;
+            }
+          }
+
+          TextureHandle texture = renderer.create_texture(
+              TextureDescription{
+                  .width  = checker_size,
+                  .height = checker_size,
+                  .format = PixelFormat::RGBA8,
+                  .usage  = TextureUsage::Sampled,
               }
           );
 
           FrameID upload_frame = renderer.begin_frame();
           CopyPassID copy      = renderer.begin_copy_pass(upload_frame);
 
-          renderer.upload_buffer(copy, vbo, std::as_bytes(std::span{triangle}));
+          renderer.upload_buffer(copy, vbo, std::as_bytes(std::span{quad}));
+          renderer.upload_buffer(copy, ibo, std::as_bytes(std::span{indices}));
+          renderer.upload_texture(copy, texture, std::as_bytes(std::span{pixels}), checker_size * 4);
 
           renderer.end_copy_pass(copy);
           renderer.submit(upload_frame);
 
-          app.insert_resource<State>(State{.pipeline = pipeline, .vbo = vbo});
+          app.insert_resource<State>(State{.pipeline = pipeline, .vbo = vbo, .ibo = ibo, .texture = texture});
         }
     );
 
@@ -109,7 +145,37 @@ public:
             auto& demo = app.require_resource<State>();
             renderer.bind_pipeline(pass, demo.pipeline);
             renderer.bind_buffer(pass, demo.vbo, 0);
-            renderer.draw(pass, 3, 1, 0);
+            renderer.bind_buffer(pass, demo.ibo, 0);
+            renderer.bind_texture(pass, ShaderStage::Fragment, 0, demo.texture);
+
+            const auto& time = app.require_resource<Time>();
+            const auto angle = static_cast<f32>(time.elapsed_seconds);
+            const f32 cos_a  = std::cos(angle);
+            const f32 sin_a  = std::sin(angle);
+
+            // row_major. each row here is one row of the matrix
+            // so no transpose bookkeeping needed.
+            const std::array<f32, 16> transform{
+                cos_a,
+                -sin_a,
+                0.0F,
+                0.0F, //
+                sin_a,
+                cos_a,
+                0.0F,
+                0.0F, //
+                0.0F,
+                0.0F,
+                1.0F,
+                0.0F, //
+                0.0F,
+                0.0F,
+                0.0F,
+                1.0F, //
+            };
+            renderer.push_uniforms(pass, ShaderStage::Vertex, 0, std::as_bytes(std::span{transform}));
+
+            renderer.draw_indexed(pass, 6, 1, 0);
 
             renderer.end_pass(pass);
           }
@@ -126,6 +192,8 @@ public:
           auto& demo     = app.require_resource<State>();
           renderer.destroy_pipeline(demo.pipeline);
           renderer.destroy_buffer(demo.vbo);
+          renderer.destroy_buffer(demo.ibo);
+          renderer.destroy_texture(demo.texture);
         }
     );
   }
