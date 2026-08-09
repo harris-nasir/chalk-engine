@@ -4,114 +4,121 @@ project(chalk VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CHALK_RENDERER "SDL3" CACHE STRING "Renderer backend selected at compile time")
-set_property(CACHE CHALK_RENDERER PROPERTY STRINGS SDL3 DX11)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CPM_SOURCE_CACHE "${CMAKE_SOURCE_DIR}/external" CACHE PATH "CPM dependency source cache")
 
 include(cmake/CompilerWarnings.cmake)
 include(cmake/get_cpm.cmake)
+include(cmake/plugins.cmake)
+include(cmake/dependencies.cmake)
+include(cmake/shaders.cmake)
 
-CPMFindPackage(
-  NAME SDL3
-  GITHUB_REPOSITORY libsdl-org/SDL
-  GIT_TAG release-3.4.14
-  OPTIONS "SDL_SHARED ON" "SDL_STATIC OFF"
-  SYSTEM TRUE
-)
+# ---------------------------------------------------------------------------
+# Plugin backend options
+# ---------------------------------------------------------------------------
+set(CHALK_PLATFORM "SDL3" CACHE STRING "Platform backend")
+set_property(CACHE CHALK_PLATFORM PROPERTY STRINGS "SDL3" "WIN32")
 
-CPMFindPackage(
-  NAME SDL3_image
-  GITHUB_REPOSITORY libsdl-org/SDL_image
-  GIT_TAG release-3.4.4
-  SYSTEM TRUE
-)
+set(CHALK_RENDERER "SDL3" CACHE STRING "Renderer backend")
+set_property(CACHE CHALK_RENDERER PROPERTY STRINGS "SDL3" "DX11")
 
-CPMAddPackage(
-  NAME SPIRV-Cross
-  GITHUB_REPOSITORY KhronosGroup/SPIRV-Cross
-  GIT_TAG main
-  OPTIONS
-    "SPIRV_CROSS_STATIC ON"
-    "SPIRV_CROSS_SHARED OFF"
-    "SPIRV_CROSS_CLI OFF"
-    "SPIRV_CROSS_ENABLE_TESTS OFF"
-  SYSTEM TRUE
-)
-# SDL_shadercross guards its spirv-cross dependency behind an underscore-named
-# target check; alias the hyphenated target it actually links against.
-add_library(spirv_cross_c ALIAS spirv-cross-c)
+set(CHALK_AUDIO "None" CACHE STRING "Audio backend")
+set_property(CACHE CHALK_AUDIO PROPERTY STRINGS "None" "XAudio2")
 
-CPMFindPackage(
-  NAME SDL3_shadercross
-  GITHUB_REPOSITORY libsdl-org/SDL_shadercross
-  GIT_TAG e55cf5e31ced6f3d1be5cc6d0c50e99384f9f4ba
-  OPTIONS
-    "SDLSHADERCROSS_VENDORED OFF"
-    "SDLSHADERCROSS_DXC ON"
-    "SDLSHADERCROSS_SPIRVCROSS_SHARED OFF"
-    "SDLSHADERCROSS_SHARED OFF"
-    "SDLSHADERCROSS_STATIC ON"
-    "SDLSHADERCROSS_CLI ON"
-    "SDLSHADERCROSS_INSTALL OFF"
-    "SDLSHADERCROSS_TESTS OFF"
-  SYSTEM TRUE
-)
-# shadercross loads dxcompiler.dll/dxil.dll from its own directory at runtime.
-if(TARGET DirectXShaderCompiler::dxcompiler)
-  add_custom_command(TARGET shadercross POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "$<TARGET_FILE:DirectXShaderCompiler::dxcompiler>"
-      "$<TARGET_FILE_DIR:shadercross>"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "$<TARGET_FILE:DirectXShaderCompiler::dxil>"
-      "$<TARGET_FILE_DIR:shadercross>"
-    VERBATIM
-  )
+set(CHALK_INPUT "None" CACHE STRING "Input backend")
+set_property(CACHE CHALK_INPUT PROPERTY STRINGS "None" "XInput")
+
+set(CHALK_PHYSICS "None" CACHE STRING "Physics backend")
+set_property(CACHE CHALK_PHYSICS PROPERTY STRINGS "None" "Simple")
+
+if(NOT CHALK_PLATFORM MATCHES "^(SDL3|WIN32)$")
+  message(FATAL_ERROR "CHALK_PLATFORM must be SDL3 or WIN32 (got '${CHALK_PLATFORM}')")
+endif()
+if(NOT CHALK_RENDERER MATCHES "^(SDL3|DX11)$")
+  message(FATAL_ERROR "CHALK_RENDERER must be SDL3 or DX11 (got '${CHALK_RENDERER}')")
+endif()
+if(NOT CHALK_AUDIO MATCHES "^(None|XAudio2)$")
+  message(FATAL_ERROR "CHALK_AUDIO must be None or XAudio2 (got '${CHALK_AUDIO}')")
+endif()
+if(NOT CHALK_INPUT MATCHES "^(None|XInput)$")
+  message(FATAL_ERROR "CHALK_INPUT must be None or XInput (got '${CHALK_INPUT}')")
+endif()
+if(NOT CHALK_PHYSICS MATCHES "^(None|Simple)$")
+  message(FATAL_ERROR "CHALK_PHYSICS must be None or Simple (got '${CHALK_PHYSICS}')")
 endif()
 
-# Compile HLSL shaders to SPIR-V with the shadercross CLI whenever they change.
-# Outputs land in <build>/shaders, next to the executable. Stage comes from the
-# filename suffix: *.vertex.hlsl / *.fragment.hlsl / *.compute.hlsl.
-set(SHADERS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders")
-set(SHADERS_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
-file(GLOB_RECURSE SHADER_SOURCES CONFIGURE_DEPENDS "${SHADERS_SOURCE_DIR}/*.hlsl")
+# ---------------------------------------------------------------------------
+# Core static library
+# ---------------------------------------------------------------------------
+add_library(chalk_core STATIC)
+target_sources(chalk_core
+  PUBLIC
+  FILE_SET CXX_MODULES
+  FILES
+    engine/core/core.ixx
+    engine/core/core.option.ixx
+    engine/core/core.type.ixx
+    engine/plugin/platform/platform.ixx
+    engine/plugin/renderer/renderer.types.ixx
+    engine/plugin/audio/audio.ixx
+    engine/plugin/input/input.ixx
+    engine/plugin/physics/physics.ixx
+)
+set_project_warnings(chalk_core)
+set_chalk_exceptions(chalk_core)
 
-set(SPIRV_OUTPUTS "")
-foreach(shader IN LISTS SHADER_SOURCES)
-  if(NOT shader MATCHES "\.(vertex|fragment|compute)\.hlsl$")
-    message(WARNING "Skipping ${shader}: cannot derive shader stage from filename")
-    continue()
-  endif()
-  set(stage "${CMAKE_MATCH_1}")
-  get_filename_component(stem "${shader}" NAME)
-  string(REGEX REPLACE "\.hlsl$" "" stem "${stem}")
-  set(output "${SHADERS_OUTPUT_DIR}/${stem}.spv")
-  add_custom_command(
-    OUTPUT "${output}"
-    COMMAND "$<TARGET_FILE:shadercross>" "${shader}" -s HLSL -d SPIRV -t "${stage}" -o "${output}"
-    DEPENDS "${shader}" shadercross
-    COMMENT "Compiling ${stem}.hlsl -> ${stem}.spv"
-    VERBATIM
-  )
-  list(APPEND SPIRV_OUTPUTS "${output}")
-endforeach()
+# ---------------------------------------------------------------------------
+# Backend static libraries (only selected ones are compiled/linked)
+# ---------------------------------------------------------------------------
+set(CHALK_PLUGIN_LIBS "")
 
-add_custom_target(shaders ALL DEPENDS ${SPIRV_OUTPUTS})
+if(CHALK_PLATFORM STREQUAL "SDL3")
+  include(engine/plugin/platform/sdl3/CMakeLists.txt)
+  list(APPEND CHALK_PLUGIN_LIBS chalk_platform_sdl3)
+elseif(CHALK_PLATFORM STREQUAL "WIN32")
+  include(engine/plugin/platform/win32/CMakeLists.txt)
+  list(APPEND CHALK_PLUGIN_LIBS chalk_platform_win32)
+endif()
 
-file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "source/*.cxx")
-file(GLOB_RECURSE MODULE_SOURCES CONFIGURE_DEPENDS "engine/*.ixx" "source/*.ixx")
+if(CHALK_RENDERER STREQUAL "SDL3")
+  include(engine/plugin/renderer/sdl3/CMakeLists.txt)
+  list(APPEND CHALK_PLUGIN_LIBS chalk_renderer_sdl3)
+elseif(CHALK_RENDERER STREQUAL "DX11")
+  include(engine/plugin/renderer/dx11/CMakeLists.txt)
+  list(APPEND CHALK_PLUGIN_LIBS chalk_renderer_dx11)
+endif()
 
+if(CHALK_AUDIO STREQUAL "XAudio2")
+  include(engine/plugin/audio/xaudio2/CMakeLists.txt)
+  list(APPEND CHALK_PLUGIN_LIBS chalk_audio_xaudio2)
+endif()
+
+if(CHALK_INPUT STREQUAL "XInput")
+  include(engine/plugin/input/xinput/CMakeLists.txt)
+  list(APPEND CHALK_PLUGIN_LIBS chalk_input_xinput)
+endif()
+
+if(CHALK_PHYSICS STREQUAL "Simple")
+  include(engine/plugin/physics/simple/CMakeLists.txt)
+  list(APPEND CHALK_PLUGIN_LIBS chalk_physics_simple)
+endif()
+
+# ---------------------------------------------------------------------------
+# Main executable
+# ---------------------------------------------------------------------------
 add_executable(${PROJECT_NAME})
 
 target_sources(${PROJECT_NAME}
   PRIVATE
-  ${SOURCES}
+  source/main.cxx
 
   PRIVATE
   FILE_SET CXX_MODULES
-  FILES ${MODULE_SOURCES}
+  FILES
+    engine/engine.ixx
+    engine/plugin/renderer/renderer.ixx
+    engine/plugin/plugin.default.ixx
 )
 
 add_dependencies(${PROJECT_NAME} shaders)
@@ -123,20 +130,15 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
   VERBATIM
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE SDL3::SDL3 SDL3_image::SDL3_image d3d11)
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+  CHALK_PLATFORM_${CHALK_PLATFORM}
+  CHALK_RENDERER_${CHALK_RENDERER}
+  CHALK_AUDIO_${CHALK_AUDIO}
+  CHALK_INPUT_${CHALK_INPUT}
+  CHALK_PHYSICS_${CHALK_PHYSICS}
+)
+
+target_link_libraries(${PROJECT_NAME} PRIVATE chalk_core ${CHALK_PLUGIN_LIBS})
 
 set_project_warnings(${PROJECT_NAME})
-
-if(CHALK_RENDERER STREQUAL "SDL3")
-  target_compile_definitions(${PROJECT_NAME} PRIVATE CHALK_RENDERER_SDL3)
-elseif(CHALK_RENDERER STREQUAL "DX11")
-  target_compile_definitions(${PROJECT_NAME} PRIVATE CHALK_RENDERER_DX11)
-else()
-  message(FATAL_ERROR "Unknown CHALK_RENDERER value: ${CHALK_RENDERER} (expected SDL3 or DX11)")
-endif()
-
-if(MSVC)
-  target_compile_options(${PROJECT_NAME} PRIVATE /EHs-c-)
-else()
-  target_compile_options(${PROJECT_NAME} PRIVATE -fno-exceptions)
-endif()
+set_chalk_exceptions(${PROJECT_NAME})

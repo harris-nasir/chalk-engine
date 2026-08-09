@@ -11,7 +11,4 @@ cmake --build --preset clang
 ```
 
 ## Requirements
-Requires a C++26 compiler with C++20 module support (Clang >= 18, GCC >= 15). 
-
-## Dependencies 
-SDL3, SDL3_image are fetched automatically via CPM on first configure.
+Requires a C++26 compiler with C++20 module support (Clang >= 18, GCC >= 15).
