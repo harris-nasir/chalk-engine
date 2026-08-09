@@ -123,6 +123,7 @@ target_sources(${PROJECT_NAME}
     engine/engine.ixx
     engine/plugin/renderer/renderer.ixx
     engine/plugin/plugin.default.ixx
+    source/camera.ixx
 )
 
 add_dependencies(${PROJECT_NAME} shaders)

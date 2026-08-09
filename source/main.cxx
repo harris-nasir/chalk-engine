@@ -4,6 +4,8 @@
 import engine;
 using namespace engine;
 
+import camera;
+
 struct Vertex
 {
   f32 x, y, z;
@@ -17,112 +19,6 @@ struct SharedAssets
   BufferHandle ibo;
   TextureHandle texture;
 };
-
-auto key_name(Key key) -> char const*
-{
-  switch (key)
-  {
-    case Key::W:
-      return "W";
-    case Key::A:
-      return "A";
-    case Key::S:
-      return "S";
-    case Key::D:
-      return "D";
-    case Key::Space:
-      return "Space";
-    case Key::Escape:
-      return "Escape";
-    case Key::Up:
-      return "Up";
-    case Key::Down:
-      return "Down";
-    case Key::Left:
-      return "Left";
-    case Key::Right:
-      return "Right";
-    default:
-      return "?";
-  }
-}
-
-auto add_input_test(App& app) -> void
-{
-  app.add_system(
-      Schedule::PreUpdate,
-      [last_summary = 0.0](App& app) mutable -> void
-      {
-        if (!app.has_resource<InputState>())
-        {
-          return;
-        }
-
-        constexpr std::array test_keys{
-            Key::W,
-            Key::A,
-            Key::S,
-            Key::D,
-            Key::Space,
-            Key::Escape,
-            Key::Up,
-            Key::Down,
-            Key::Left,
-            Key::Right,
-        };
-
-        auto& input = app.require_resource<InputState>();
-
-        for (Key key : test_keys)
-        {
-          if (input.just_pressed(key))
-          {
-            app.report(Severity::Info, "input: {} just pressed", key_name(key));
-          }
-          if (input.just_released(key))
-          {
-            app.report(Severity::Info, "input: {} just released", key_name(key));
-          }
-        }
-
-        if (input.just_pressed(MouseButton::Left))
-        {
-          app.report(Severity::Info, "input: left click at ({}, {})", input.mouse_x(), input.mouse_y());
-        }
-        if (input.just_pressed(MouseButton::Right))
-        {
-          app.report(Severity::Info, "input: right click at ({}, {})", input.mouse_x(), input.mouse_y());
-        }
-        if (input.just_pressed(MouseButton::Middle))
-        {
-          app.report(Severity::Info, "input: middle click at ({}, {})", input.mouse_x(), input.mouse_y());
-        }
-
-        const auto& time = app.require_resource<Time>();
-        if (time.elapsed_seconds - last_summary >= 1.0)
-        {
-          last_summary = time.elapsed_seconds;
-
-          for (Key key : test_keys)
-          {
-            if (input.is_pressed(key))
-            {
-              app.report(Severity::Info, "input: {} held", key_name(key));
-            }
-          }
-
-          app.report(
-              Severity::Info,
-              "input: mouse at ({}, {}) delta ({}, {})",
-              input.mouse_x(),
-              input.mouse_y(),
-              input.mouse_delta_x(),
-              input.mouse_delta_y()
-          );
-        }
-      }
-  );
-}
 
 class GamePlugin
 {
@@ -233,15 +129,13 @@ public:
           for (f32 offset : offsets)
           {
             EntityID entity = world.spawn();
-            world.add<Transform>(entity, {.position = Vector3{.x = offset}, .scale = Vector2{0.8F, 0.8F}});
+            world.add<Transform>(entity, {.position = Vector3{.x = offset}, .scale = Vector2{.x = 0.8F, .y = 0.8F}});
             world.add<Renderable>(
                 entity, {.pipeline = pipeline, .vbo = vbo, .ibo = ibo, .index_count = 6, .texture = texture}
             );
           }
         }
     );
-
-    add_input_test(app);
 
     app.add_system(
         Schedule::Update,
@@ -276,7 +170,12 @@ public:
 
             PassID pass = renderer.begin_pass(frame, RenderPassDescription{.color_attachments = color_attachments});
 
-            auto& world = app.require_resource<World>();
+            auto& world  = app.require_resource<World>();
+            auto& camera = app.require_resource<Camera>();
+            auto& window = app.require_resource<Window>();
+
+            f32 aspect_ratio        = static_cast<f32>(window.width) / static_cast<f32>(window.height);
+            Matrix4 view_projection = camera.projection(aspect_ratio) * camera.view();
 
             for (const auto& [id, transform, renderable] : world.view<Transform, Renderable>())
             {
@@ -285,9 +184,10 @@ public:
               renderer.bind_buffer(pass, renderable.ibo, 0);
               renderer.bind_texture(pass, ShaderStage::Fragment, 0, renderable.texture);
 
-              Matrix4 matrix = Matrix4::translation(transform.position) * Matrix4::rotation_z(transform.rotation)
-                               * Matrix4::scale(transform.scale);
-              renderer.push_uniforms(pass, ShaderStage::Vertex, 0, std::as_bytes(std::span{matrix.values}));
+              Matrix4 model = Matrix4::translation(transform.position) * Matrix4::rotation_z(transform.rotation)
+                              * Matrix4::scale(transform.scale);
+              Matrix4 mvp   = view_projection * model;
+              renderer.push_uniforms(pass, ShaderStage::Vertex, 0, std::as_bytes(std::span{mvp.values}));
 
               renderer.draw_indexed(pass, renderable.index_count, 1, 0);
             }
@@ -318,6 +218,7 @@ auto main() -> int
 {
   App app;
   app.add_plugin<DefaultPlugin>(WindowDescription{.title = "Engine"});
+  app.add_plugin<CameraPlugin>();
   app.add_plugin<GamePlugin>();
 
   app.execute();
