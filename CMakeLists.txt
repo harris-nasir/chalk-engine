@@ -66,6 +66,7 @@ target_sources(chalk_core
     engine/plugin/audio/audio.ixx
     engine/plugin/input/input.ixx
     engine/plugin/physics/physics.ixx
+    engine/plugin/scene/scene.ixx
 )
 set_project_warnings(chalk_core)
 set_chalk_exceptions(chalk_core)

@@ -16,6 +16,7 @@ import engine.platform.win32;
 #endif
 
 import engine.renderer;
+import engine.scene;
 
 #if defined(CHALK_RENDERER_SDL3)
 import engine.renderer.sdl3;
@@ -82,6 +83,8 @@ namespace engine
           renderer.resize(window.width, window.height);
         }
     );
+
+    app.add_plugin<ScenePlugin>();
 
 #if defined(CHALK_AUDIO_XAUDIO2)
     app.add_plugin<AudioXAudio2Plugin>();
