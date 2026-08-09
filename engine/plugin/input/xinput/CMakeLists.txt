@@ -1,1 +1,0 @@
-add_chalk_backend_plugin(chalk_input_xinput)
