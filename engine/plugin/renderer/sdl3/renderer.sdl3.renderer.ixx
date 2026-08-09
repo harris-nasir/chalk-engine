@@ -80,6 +80,10 @@ namespace engine
 {
   namespace
   {
+    // Never a real HandleTable index (those start at 1 and grow one at a
+    // time), so it can never collide with a created texture's handle.
+    constexpr u64 SWAPCHAIN_TEXTURE_HANDLE = ~u64{0};
+
     [[nodiscard]] auto make_buffer_handle(BufferUsage type, u64 id) -> BufferHandle
     {
       switch (type)
@@ -491,9 +495,7 @@ namespace engine
     }
     if (bytes.size() > record->size)
     {
-      app_.report(
-          Severity::Error, "data size {} exceeds buffer size {} (id: {})", bytes.size(), record->size, id
-      );
+      app_.report(Severity::Error, "data size {} exceeds buffer size {} (id: {})", bytes.size(), record->size, id);
       return;
     }
 
