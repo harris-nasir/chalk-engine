@@ -74,56 +74,76 @@ export namespace engine
     Count,
   };
 
-  // Level state (is_pressed) plus one frame of history (key_down_previous)
-  // is enough to derive edges (just_pressed/just_released) without any
-  // event queue - backends only ever need to fill in the "current" arrays
-  // and copy them into "previous" once per frame, before polling.
-  struct InputState
+  class InputState
   {
-    // Public data fields are intentional (same pattern as Window): backends
-    // fill them directly each frame and the query methods only read them.
-    // NOLINTBEGIN(misc-non-private-member-variables-in-classes)
-    std::array<bool, static_cast<std::size_t>(Key::Count)> key_down{};
-    std::array<bool, static_cast<std::size_t>(Key::Count)> key_down_previous{};
-    std::array<bool, static_cast<std::size_t>(MouseButton::Count)> mouse_down{};
-    std::array<bool, static_cast<std::size_t>(MouseButton::Count)> mouse_down_previous{};
-
-    f32 mouse_x       = 0.0F;
-    f32 mouse_y       = 0.0F;
-    f32 mouse_delta_x = 0.0F;
-    f32 mouse_delta_y = 0.0F;
-    // NOLINTEND(misc-non-private-member-variables-in-classes)
-
-    [[nodiscard]] auto is_pressed(Key key) const -> bool { return key_down.at(static_cast<std::size_t>(key)); }
+  public:
+    [[nodiscard]] auto is_pressed(Key key) const -> bool { return key_down_.at(static_cast<std::size_t>(key)); }
 
     [[nodiscard]] auto just_pressed(Key key) const -> bool
     {
       auto index = static_cast<std::size_t>(key);
-      return key_down.at(index) && !key_down_previous.at(index);
+      return key_down_.at(index) && !key_down_previous_.at(index);
     }
 
     [[nodiscard]] auto just_released(Key key) const -> bool
     {
       auto index = static_cast<std::size_t>(key);
-      return !key_down.at(index) && key_down_previous.at(index);
+      return !key_down_.at(index) && key_down_previous_.at(index);
     }
 
     [[nodiscard]] auto is_pressed(MouseButton button) const -> bool
     {
-      return mouse_down.at(static_cast<std::size_t>(button));
+      return mouse_down_.at(static_cast<std::size_t>(button));
     }
 
     [[nodiscard]] auto just_pressed(MouseButton button) const -> bool
     {
       auto index = static_cast<std::size_t>(button);
-      return mouse_down.at(index) && !mouse_down_previous.at(index);
+      return mouse_down_.at(index) && !mouse_down_previous_.at(index);
     }
 
     [[nodiscard]] auto just_released(MouseButton button) const -> bool
     {
       auto index = static_cast<std::size_t>(button);
-      return !mouse_down.at(index) && mouse_down_previous.at(index);
+      return !mouse_down_.at(index) && mouse_down_previous_.at(index);
     }
+
+    [[nodiscard]] auto mouse_x() const -> f32 { return mouse_x_; }
+    [[nodiscard]] auto mouse_y() const -> f32 { return mouse_y_; }
+    [[nodiscard]] auto mouse_delta_x() const -> f32 { return mouse_delta_x_; }
+    [[nodiscard]] auto mouse_delta_y() const -> f32 { return mouse_delta_y_; }
+
+    // Advance to the next frame, then report the current hardware state.
+    // Called by input plugins once per frame.
+    void begin_frame()
+    {
+      key_down_previous_   = key_down_;
+      mouse_down_previous_ = mouse_down_;
+    }
+
+    void set_key_down(Key key, bool down) { key_down_.at(static_cast<std::size_t>(key)) = down; }
+
+    void set_mouse_button(MouseButton button, bool down) { mouse_down_.at(static_cast<std::size_t>(button)) = down; }
+
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+    void set_mouse_position(f32 x, f32 y)
+    {
+      mouse_delta_x_ = x - mouse_x_;
+      mouse_delta_y_ = y - mouse_y_;
+      mouse_x_       = x;
+      mouse_y_       = y;
+    }
+
+  private:
+    std::array<bool, static_cast<std::size_t>(Key::Count)> key_down_{};
+    std::array<bool, static_cast<std::size_t>(Key::Count)> key_down_previous_{};
+    std::array<bool, static_cast<std::size_t>(MouseButton::Count)> mouse_down_{};
+    std::array<bool, static_cast<std::size_t>(MouseButton::Count)> mouse_down_previous_{};
+
+    f32 mouse_x_       = 0.0F;
+    f32 mouse_y_       = 0.0F;
+    f32 mouse_delta_x_ = 0.0F;
+    f32 mouse_delta_y_ = 0.0F;
   };
 
 } // namespace engine

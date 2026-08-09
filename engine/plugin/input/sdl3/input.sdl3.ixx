@@ -245,8 +245,8 @@ namespace engine
   {
     for (auto i = static_cast<std::size_t>(1); i < static_cast<std::size_t>(Key::Count); ++i)
     {
-      auto key             = static_cast<Key>(i);
-      state.key_down.at(i) = is_key_down(key);
+      auto key           = static_cast<Key>(i);
+      state.set_key_down(key, is_key_down(key));
     }
   }
 
@@ -282,9 +282,8 @@ namespace engine
           Schedule::PreUpdate,
           [](App& app) -> void
           {
-            auto& state               = app.require_resource<InputState>();
-            state.key_down_previous   = state.key_down;
-            state.mouse_down_previous = state.mouse_down;
+            auto& state = app.require_resource<InputState>();
+            state.begin_frame();
 
             SDL_PumpEvents();
 
@@ -298,14 +297,11 @@ namespace engine
             float mouse_y = 0.0F;
             auto buttons  = SDL_GetMouseState(&mouse_x, &mouse_y);
 
-            state.mouse_down[static_cast<std::size_t>(MouseButton::Left)]   = (buttons & SDL_BUTTON_LMASK) != 0;
-            state.mouse_down[static_cast<std::size_t>(MouseButton::Right)]  = (buttons & SDL_BUTTON_RMASK) != 0;
-            state.mouse_down[static_cast<std::size_t>(MouseButton::Middle)] = (buttons & SDL_BUTTON_MMASK) != 0;
+            state.set_mouse_button(MouseButton::Left, (buttons & SDL_BUTTON_LMASK) != 0);
+            state.set_mouse_button(MouseButton::Right, (buttons & SDL_BUTTON_RMASK) != 0);
+            state.set_mouse_button(MouseButton::Middle, (buttons & SDL_BUTTON_MMASK) != 0);
 
-            state.mouse_delta_x = mouse_x - state.mouse_x;
-            state.mouse_delta_y = mouse_y - state.mouse_y;
-            state.mouse_x       = mouse_x;
-            state.mouse_y       = mouse_y;
+            state.set_mouse_position(mouse_x, mouse_y);
           }
       );
 
@@ -328,28 +324,20 @@ namespace engine
         Schedule::PreUpdate,
         [window](App& app) -> void
         {
-          auto& state               = app.require_resource<InputState>();
-          state.key_down_previous   = state.key_down;
-          state.mouse_down_previous = state.mouse_down;
+          auto& state = app.require_resource<InputState>();
+          state.begin_frame();
 
           poll_all_keys(state, [](Key key) -> bool { return (GetAsyncKeyState(to_virtual_key(key)) & 0x8000) != 0; });
 
-          state.mouse_down[static_cast<std::size_t>(MouseButton::Left)]  = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-          state.mouse_down[static_cast<std::size_t>(MouseButton::Right)] = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
-          state.mouse_down[static_cast<std::size_t>(MouseButton::Middle)]
-              = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+          state.set_mouse_button(MouseButton::Left, (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0);
+          state.set_mouse_button(MouseButton::Right, (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0);
+          state.set_mouse_button(MouseButton::Middle, (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0);
 
           POINT point{};
           GetCursorPos(&point);
           ScreenToClient(window, &point);
 
-          auto mouse_x = static_cast<f32>(point.x);
-          auto mouse_y = static_cast<f32>(point.y);
-
-          state.mouse_delta_x = mouse_x - state.mouse_x;
-          state.mouse_delta_y = mouse_y - state.mouse_y;
-          state.mouse_x       = mouse_x;
-          state.mouse_y       = mouse_y;
+          state.set_mouse_position(static_cast<f32>(point.x), static_cast<f32>(point.y));
         }
     );
   }
