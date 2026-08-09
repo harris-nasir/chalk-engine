@@ -1,6 +1,7 @@
 export module engine;
 
 export import engine.core;
+export import engine.math;
 export import engine.platform;
 export import engine.renderer;
 export import engine.audio;

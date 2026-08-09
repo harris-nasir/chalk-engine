@@ -9,6 +9,7 @@ module;
 export module engine.scene;
 
 import engine.core;
+import engine.math;
 import engine.renderer.types;
 
 export namespace engine
@@ -21,9 +22,9 @@ export namespace engine
 
   struct Transform
   {
-    f32 x = 0.0F, y = 0.0F, z = 0.0F;
+    Vector3 position{};
     f32 rotation = 0.0F; // radians, around z
-    f32 scale_x = 1.0F, scale_y = 1.0F;
+    Vector2 scale{.x = 1.0F, .y = 1.0F};
   };
 
   struct Renderable
