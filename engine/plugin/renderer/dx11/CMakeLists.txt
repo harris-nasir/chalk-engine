@@ -1,0 +1,2 @@
+add_chalk_backend_plugin(chalk_renderer_dx11)
+target_link_libraries(chalk_renderer_dx11 PUBLIC d3d11 d3dcompiler)

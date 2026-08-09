@@ -2,8 +2,11 @@ module;
 
 #include <concepts>
 #include <cstddef>
+#include <optional>
 #include <span>
+#include <utility>
 #include <variant>
+#include <vector>
 
 export module engine.renderer.types;
 
@@ -144,6 +147,7 @@ export namespace engine
     SPIRV,
     DXIL,
     MSL,
+    HLSL,
   };
 
   struct ShaderResourceCounts
@@ -207,6 +211,44 @@ export namespace engine
   {
     std::span<const ColorAttachment> color_attachments;
     Option<DepthAttachment> depth_attachment{}; // empty = no depth buffer bound
+  };
+
+  // Generic 1-based index table shared by every backend's resource records
+  // (buffers/textures/shaders/pipelines): index 0 is reserved for Invalid,
+  // and indices are never reused, so a stale handle reliably misses instead
+  // of silently aliasing a newer resource.
+  template <typename T>
+  class HandleTable
+  {
+  public:
+    auto insert(T value) -> u64
+    {
+      slots_.push_back(std::move(value));
+      return slots_.size(); // 1-based; 0 is reserved for Invalid, and indices are never reused
+    }
+
+    [[nodiscard]] auto get(u64 handle) -> T*
+    {
+      if (handle == 0 || handle > slots_.size())
+      {
+        return nullptr;
+      }
+      auto& slot = slots_[handle - 1];
+      return slot ? &*slot : nullptr;
+    }
+
+    auto destroy(u64 handle) -> bool
+    {
+      if (get(handle) == nullptr)
+      {
+        return false;
+      }
+      slots_[handle - 1].reset();
+      return true;
+    }
+
+  private:
+    std::vector<std::optional<T>> slots_;
   };
 
   template <typename T>

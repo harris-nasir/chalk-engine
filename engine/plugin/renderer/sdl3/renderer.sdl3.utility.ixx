@@ -2,10 +2,6 @@ module;
 
 #include <SDL3/SDL.h>
 
-#include <optional>
-#include <utility>
-#include <vector>
-
 export module engine.renderer.sdl3:utility;
 
 import engine.core;
@@ -13,40 +9,6 @@ import engine.renderer.types;
 
 namespace engine
 {
-  template <typename T>
-  class HandleTable
-  {
-  public:
-    auto insert(T value) -> u64
-    {
-      slots_.push_back(std::move(value));
-      return slots_.size(); // 1-based; 0 is reserved for Invalid, and indices are never reused
-    }
-
-    [[nodiscard]] auto get(u64 handle) -> T*
-    {
-      if (handle == 0 || handle > slots_.size())
-      {
-        return nullptr;
-      }
-      auto& slot = slots_[handle - 1];
-      return slot ? &*slot : nullptr;
-    }
-
-    auto destroy(u64 handle) -> bool
-    {
-      if (get(handle) == nullptr)
-      {
-        return false;
-      }
-      slots_[handle - 1].reset();
-      return true;
-    }
-
-  private:
-    std::vector<std::optional<T>> slots_;
-  };
-
   struct BufferRecord
   {
     SDL_GPUBuffer* handle;
@@ -60,10 +22,6 @@ namespace engine
     u32 height;
     engine::PixelFormat format;
   };
-
-  // Never a real HandleTable index (those start at 1 and grow one at a
-  // time), so it can never collide with a created texture's handle.
-  constexpr u64 SWAPCHAIN_TEXTURE_HANDLE = ~u64{0};
 
   [[nodiscard]] auto to_sdl_pixel_format(engine::PixelFormat format) -> SDL_GPUTextureFormat
   {
@@ -192,6 +150,8 @@ namespace engine
         return SDL_GPU_SHADERFORMAT_DXIL;
       case engine::ShaderFormat::MSL:
         return SDL_GPU_SHADERFORMAT_MSL;
+      case engine::ShaderFormat::HLSL:
+        return SDL_GPU_SHADERFORMAT_INVALID;
     }
     return SDL_GPU_SHADERFORMAT_INVALID;
   }
